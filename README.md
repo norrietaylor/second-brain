@@ -21,8 +21,6 @@ Install via Obsidian Settings > Community Plugins:
 - **Bases** (core, enable in Core Plugins)
 - **Templater** by SilentVoid
 - **Update frontmatter modified date** by Alan Grainger
-- **Google Calendar** (optional, for calendar blocks in daily notes)
-- **Tasks** by Martin Schenck
 
 ## Setup
 
@@ -34,78 +32,32 @@ git clone <repo-url> ~/Documents/obsidian/second-brain
 
 Open the folder as a vault in Obsidian.
 
-### 2. Install Obsidian plugins
+### 2. Run the setup command
 
-Open Settings > Community Plugins, install the plugins listed above, then:
+With the vault open in Obsidian, start Claude Code in the vault directory and run:
 
-- **Templater**: set template folder to `05 Meta/templates`
-- **Update frontmatter modified date**: set format to `YYYY-MM-DD HH:mm`, add `05 Meta` to excluded folders
-- **Google Calendar**: configure with your Google account (optional)
-
-### 3. Create personal context files
-
-These are gitignored — create them locally:
-
-```bash
-mkdir -p "05 Meta/context" "05 Meta/logs"
-
-cat > "05 Meta/context/work-profile.md" << 'EOF'
----
-type: context
----
-# Work Profile
-
-- **Name:** Your Name
-- **Role:** Your Role
-- **Email:** you@example.com
-EOF
-
-cat > "05 Meta/context/current-priorities.md" << 'EOF'
----
-type: context
----
-# Current Priorities
-
-1. ...
-2. ...
-3. ...
-EOF
-
-touch "05 Meta/logs/inbox-log.md"
+```
+/setup
 ```
 
-The tag taxonomy (`05 Meta/context/tags.md`) is committed and shared.
+This interactive command will:
+- Create all gitignored directories (`04 Data/`, `05 Meta/context/`, `05 Meta/logs/`, `03 Resources/`, `~/second-brain-inbox/`)
+- Scaffold personal context files (work profile, priorities) with your input
+- Validate all prerequisites (Obsidian CLI, GitHub CLI, jq, Python 3)
+- Check GitHub authentication
+- Verify Obsidian vault access and script permissions
+- Remind you to configure required Obsidian plugins
+- Create `.claude/settings.local.json` if missing
 
-### 4. Configure environment
+### 3. Manual steps after `/setup`
 
-```bash
-# GitHub CLI auth
-gh auth login
+The command will flag anything it can't automate. Common manual steps:
 
-# Optional: Slack MCP server
-cp .env.example .env   # fill in your Slack tokens
-./run-mcp.sh
-```
-
-### 5. Create the inbox drop folder
-
-```bash
-mkdir -p ~/second-brain-inbox
-```
-
-Other projects can drop markdown files here. `sb-ingest` moves them into the vault.
-
-### 6. Set up Claude Code local settings
-
-Create `.claude/settings.local.json` for user-specific MCP servers and permissions (gitignored):
-
-```json
-{
-  "permissions": {
-    "allow": []
-  }
-}
-```
+- **Obsidian plugins** — install via Settings > Community Plugins:
+  - **Templater**: set template folder to `05 Meta/templates`
+  - **Update frontmatter modified date**: set format to `YYYY-MM-DD HH:mm`, add `05 Meta` to excluded folders
+- **GitHub auth** — if not authenticated, run `gh auth login`
+- **Slack MCP** (optional) — `cp .env.example .env`, fill in tokens, run `./run-mcp.sh`
 
 ## Preflight Check
 
@@ -154,6 +106,7 @@ See [CLAUDE.md](CLAUDE.md) for full system documentation: type dispatch, file na
 
 | Command | When to use |
 |---|---|
+| `/setup` | First-time vault initialization after cloning |
 | `/today` | Start of day — briefing, daily note, GitHub sync |
 | `/eod` | End of day — classify inbox, detect dirty notes, generate digest |
 | `/meeting` | Create a meeting note from natural language |

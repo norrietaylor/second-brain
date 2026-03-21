@@ -114,8 +114,6 @@ System bases in `05 Meta/bases/`: Unprocessed Inbox, Dirty Notes, Modified Today
 - **Bases** (core) — Frontmatter-driven database views
 - **Templater** (community) — Template folder: `05 Meta/templates`
 - **Update frontmatter modified date** (community) — Format: `YYYY-MM-DD HH:mm`, excludes `05 Meta`
-- **Google Calendar** (community) — Calendar blocks in daily notes
-- **Tasks** (community) — Inline task tracking
 
 ## Permissions
 
