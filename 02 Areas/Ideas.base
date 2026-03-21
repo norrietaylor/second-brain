@@ -1,0 +1,12 @@
+filters: type == "idea"
+views:
+  - type: table
+    name: Ideas
+    order:
+      - file.name
+      - status
+      - file.ctime
+      - file.mtime
+    sort:
+      - property: file.mtime
+        direction: DESC

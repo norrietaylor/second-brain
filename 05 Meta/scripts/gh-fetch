@@ -1,0 +1,386 @@
+#!/bin/bash
+# ============================================================================
+# gh-fetch — Fetch GitHub issue/PR data as structured JSON
+# ============================================================================
+#
+# PURPOSE:
+#   Given a GitHub issue or PR URL, fetches metadata, comments, timeline
+#   events, and (for PRs) review data. Outputs structured JSON for the
+#   second-brain /gh-import command to consume.
+#
+# USAGE:
+#   gh-fetch <github-url>
+#   gh-fetch <github-url> --since <ISO-date>
+#
+# EXAMPLES:
+#   gh-fetch https://github.com/elastic/kibana/issues/12345
+#   gh-fetch https://github.com/elastic/kibana/pull/67890 --since 2026-02-10T00:00:00Z
+#
+# OUTPUT:
+#   JSON object on stdout with keys:
+#     metadata    — title, state, author, created_at, labels, assignees, milestone
+#     comments    — array of {author, date, body, type}
+#     events      — array of {type, date, actor, details}
+#     pr_specific — merge/review info (PRs only, null for issues)
+#     newest_activity — ISO timestamp of the most recent item
+#
+#   The --since flag filters comments and events to only include items
+#   created after the given timestamp (for incremental updates).
+#
+# RATE LIMITING:
+#   Checks X-RateLimit-Remaining after each API call. If remaining < 100,
+#   sleeps until X-RateLimit-Reset. Warnings logged to stderr.
+#
+# DEPENDENCIES:
+#   - gh (GitHub CLI, authenticated)
+#   - jq
+#
+# EXIT CODES:
+#   0 — success
+#   1 — invalid arguments, parse error, or API failure
+# ============================================================================
+
+set -euo pipefail
+
+# ---- Rate limit state -------------------------------------------------------
+
+_RATE_REMAINING=""
+_RATE_RESET=""
+
+# ---- Helpers ----------------------------------------------------------------
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+# Rate-limit-aware gh api wrapper.
+# Usage: gh_api <endpoint> [extra gh api args...]
+# Outputs: JSON on stdout (headers stripped)
+gh_api() {
+  local endpoint="$1"
+  shift
+
+  # Check rate limit from previous call
+  if [ -n "$_RATE_REMAINING" ] && [ "$_RATE_REMAINING" -lt 100 ] 2>/dev/null; then
+    local now
+    now=$(date +%s)
+    if [ -n "$_RATE_RESET" ] && [ "$_RATE_RESET" -gt "$now" ] 2>/dev/null; then
+      local wait_secs=$(( _RATE_RESET - now + 1 ))
+      echo "RATE LIMIT: ${_RATE_REMAINING} remaining. Sleeping ${wait_secs}s until reset..." >&2
+      sleep "$wait_secs"
+    fi
+  fi
+
+  # Make the API call with headers included
+  local tmpfile
+  tmpfile=$(mktemp)
+  local response
+  response=$(gh api "$endpoint" --include "$@" 2>/dev/null) || {
+    rm -f "$tmpfile"
+    return 1
+  }
+
+  # Split headers and body
+  # gh api --include outputs headers first, then a blank line, then the body
+  local header_done=false
+  local headers=""
+  local body=""
+
+  while IFS= read -r line; do
+    if [ "$header_done" = true ]; then
+      body="${body}${line}
+"
+    elif [ -z "$line" ] || [ "$line" = $'\r' ]; then
+      header_done=true
+    else
+      headers="${headers}${line}
+"
+    fi
+  done <<< "$response"
+
+  # Extract rate limit headers
+  _RATE_REMAINING=$(echo "$headers" | grep -i '^x-ratelimit-remaining:' | awk '{print $2}' | tr -d '\r' || true)
+  _RATE_RESET=$(echo "$headers" | grep -i '^x-ratelimit-reset:' | awk '{print $2}' | tr -d '\r' || true)
+
+  echo "$body"
+  rm -f "$tmpfile"
+}
+
+# Paginated gh api call (no rate limit header tracking on paginated calls,
+# but gh handles pagination internally). Falls back to regular gh api.
+gh_api_paginated() {
+  local endpoint="$1"
+  shift
+
+  # Check rate limit from previous call
+  if [ -n "$_RATE_REMAINING" ] && [ "$_RATE_REMAINING" -lt 100 ] 2>/dev/null; then
+    local now
+    now=$(date +%s)
+    if [ -n "$_RATE_RESET" ] && [ "$_RATE_RESET" -gt "$now" ] 2>/dev/null; then
+      local wait_secs=$(( _RATE_RESET - now + 1 ))
+      echo "RATE LIMIT: ${_RATE_REMAINING} remaining. Sleeping ${wait_secs}s until reset..." >&2
+      sleep "$wait_secs"
+    fi
+  fi
+
+  gh api "$endpoint" --paginate "$@" 2>/dev/null || true
+}
+
+# ---- Usage ------------------------------------------------------------------
+
+if [ $# -lt 1 ]; then
+  echo "Usage: $0 <github-url> [--since <ISO-date>]" >&2
+  echo "Example: $0 https://github.com/owner/repo/issues/123" >&2
+  echo "Example: $0 https://github.com/owner/repo/pull/456 --since 2026-02-10T00:00:00Z" >&2
+  exit 1
+fi
+
+URL="${1%/}"
+shift
+
+SINCE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --since)
+      shift
+      SINCE="${1:-}"
+      [ -z "$SINCE" ] && die "--since requires an ISO date argument"
+      shift
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+  esac
+done
+
+# ---- Parse URL --------------------------------------------------------------
+
+if [[ "$URL" =~ github\.com/([^/]+/[^/]+)/(issues|pull)/([0-9]+) ]]; then
+  OWNER_REPO="${BASH_REMATCH[1]}"
+  URL_TYPE="${BASH_REMATCH[2]}"
+  NUMBER="${BASH_REMATCH[3]}"
+  IS_PR=$( [ "$URL_TYPE" = "pull" ] && echo true || echo false )
+elif [[ "$URL" =~ ^([^/]+/[^/]+)#([0-9]+)$ ]]; then
+  # owner/repo#123 shorthand — need to detect issue vs PR
+  OWNER_REPO="${BASH_REMATCH[1]}"
+  NUMBER="${BASH_REMATCH[2]}"
+  IS_PR=""  # will detect below
+else
+  die "Could not parse: $URL
+Expected: https://github.com/owner/repo/issues/N or .../pull/N or owner/repo#N"
+fi
+
+# ---- Fetch issue/PR metadata ------------------------------------------------
+
+ISSUE_JSON=$(gh_api "/repos/$OWNER_REPO/issues/$NUMBER")
+[ -z "$ISSUE_JSON" ] && die "Failed to fetch issue/PR metadata for $OWNER_REPO#$NUMBER"
+
+# Detect issue vs PR if needed (shorthand input)
+if [ -z "$IS_PR" ]; then
+  HAS_PR=$(echo "$ISSUE_JSON" | jq -r 'if .pull_request then "true" else "false" end')
+  IS_PR="$HAS_PR"
+fi
+
+# Extract metadata
+METADATA=$(echo "$ISSUE_JSON" | jq '{
+  title: .title,
+  state: .state,
+  author: .user.login,
+  created_at: .created_at,
+  updated_at: .updated_at,
+  labels: [.labels[].name],
+  assignees: [.assignees[].login],
+  milestone: (.milestone.title // null),
+  url: .html_url,
+  body: (.body // "")
+}')
+
+# ---- Fetch comments ----------------------------------------------------------
+
+COMMENTS_ENDPOINT="/repos/$OWNER_REPO/issues/$NUMBER/comments"
+if [ -n "$SINCE" ]; then
+  COMMENTS_ENDPOINT="${COMMENTS_ENDPOINT}?since=${SINCE}"
+fi
+
+COMMENTS=$(gh_api_paginated "$COMMENTS_ENDPOINT" \
+  --jq '.[] | {author: .user.login, date: .created_at, body: (.body // ""), type: "comment"}')
+
+# If --since provided, we don't include the opening post
+# If full fetch, include the opening post as the first "comment"
+if [ -z "$SINCE" ]; then
+  OPENING_POST=$(echo "$ISSUE_JSON" | jq '{
+    author: .user.login,
+    date: .created_at,
+    body: (.body // ""),
+    type: "opening_post"
+  }')
+  if [ -n "$COMMENTS" ]; then
+    COMMENTS="${OPENING_POST}
+${COMMENTS}"
+  else
+    COMMENTS="$OPENING_POST"
+  fi
+fi
+
+# ---- Fetch timeline events ---------------------------------------------------
+# Timeline events include label changes, assignments, state changes, etc.
+# The timeline API doesn't support --since, so we fetch all and filter client-side.
+
+EVENTS_RAW=$(gh_api_paginated "/repos/$OWNER_REPO/issues/$NUMBER/timeline" \
+  --jq '.[] | select(.event == "labeled" or .event == "unlabeled" or .event == "assigned" or .event == "unassigned" or .event == "closed" or .event == "reopened" or .event == "milestoned" or .event == "demilestoned" or .event == "renamed") | {
+    type: .event,
+    date: (.created_at // .submitted_at // ""),
+    actor: (.actor.login // .user.login // "unknown"),
+    details: (
+      if .event == "labeled" then ("added: " + .label.name)
+      elif .event == "unlabeled" then ("removed: " + .label.name)
+      elif .event == "assigned" then ("assigned: " + (.assignee.login // "unknown"))
+      elif .event == "unassigned" then ("unassigned: " + (.assignee.login // "unknown"))
+      elif .event == "renamed" then ("\"" + (.rename.from // "") + "\" -> \"" + (.rename.to // "") + "\"")
+      elif .event == "milestoned" then ("milestone: " + (.milestone.title // ""))
+      elif .event == "demilestoned" then ("removed milestone: " + (.milestone.title // ""))
+      else .event
+      end
+    )
+  }')
+
+# Filter events by --since if provided
+if [ -n "$SINCE" ] && [ -n "$EVENTS_RAW" ]; then
+  EVENTS=$(echo "$EVENTS_RAW" | jq -s --arg since "$SINCE" '
+    [.[] | select(.date >= $since)][]
+  ')
+else
+  EVENTS="$EVENTS_RAW"
+fi
+
+# ---- Fetch PR-specific data -------------------------------------------------
+
+PR_SPECIFIC="null"
+if [ "$IS_PR" = "true" ]; then
+  PR_JSON=$(gh_api "/repos/$OWNER_REPO/pulls/$NUMBER")
+
+  PR_SPECIFIC=$(echo "$PR_JSON" | jq '{
+    merged: .merged,
+    merged_at: (.merged_at // null),
+    mergeable_state: (.mergeable_state // null),
+    draft: .draft,
+    additions: .additions,
+    deletions: .deletions,
+    changed_files: .changed_files,
+    base_branch: .base.ref,
+    head_branch: .head.ref
+  }')
+
+  # Fetch reviews
+  REVIEWS=$(gh_api_paginated "/repos/$OWNER_REPO/pulls/$NUMBER/reviews" \
+    --jq '.[] | select((.body // "") != "" or .state != "COMMENTED") | {
+      author: .user.login,
+      date: .submitted_at,
+      body: ((.state // "REVIEW") + (if (.body // "") != "" then ": " + .body else "" end)),
+      type: "review"
+    }')
+
+  # Filter reviews by --since if provided
+  if [ -n "$SINCE" ] && [ -n "$REVIEWS" ]; then
+    REVIEWS=$(echo "$REVIEWS" | jq -s --arg since "$SINCE" '
+      [.[] | select(.date >= $since)][]
+    ')
+  fi
+
+  # Fetch review comments (inline)
+  REVIEW_COMMENTS=$(gh_api_paginated "/repos/$OWNER_REPO/pulls/$NUMBER/comments" \
+    --jq '.[] | {
+      author: .user.login,
+      date: .created_at,
+      body: ("(on " + (.path // "file") + ")\n" + (.body // "")),
+      type: "review_comment"
+    }')
+
+  # Filter review comments by --since if provided
+  if [ -n "$SINCE" ] && [ -n "$REVIEW_COMMENTS" ]; then
+    REVIEW_COMMENTS=$(echo "$REVIEW_COMMENTS" | jq -s --arg since "$SINCE" '
+      [.[] | select(.date >= $since)][]
+    ')
+  fi
+
+  # Merge PR reviews and review comments into comments
+  if [ -n "$REVIEWS" ]; then
+    if [ -n "$COMMENTS" ]; then
+      COMMENTS="${COMMENTS}
+${REVIEWS}"
+    else
+      COMMENTS="$REVIEWS"
+    fi
+  fi
+
+  if [ -n "$REVIEW_COMMENTS" ]; then
+    if [ -n "$COMMENTS" ]; then
+      COMMENTS="${COMMENTS}
+${REVIEW_COMMENTS}"
+    else
+      COMMENTS="$REVIEW_COMMENTS"
+    fi
+  fi
+fi
+
+# ---- Compute newest_activity -------------------------------------------------
+
+# Combine all timestamps from comments and events to find the newest
+ALL_DATES=""
+if [ -n "$COMMENTS" ]; then
+  ALL_DATES=$(echo "$COMMENTS" | jq -r '.date // empty' 2>/dev/null || true)
+fi
+if [ -n "$EVENTS" ]; then
+  EVENT_DATES=$(echo "$EVENTS" | jq -r '.date // empty' 2>/dev/null || true)
+  if [ -n "$EVENT_DATES" ]; then
+    ALL_DATES="${ALL_DATES}
+${EVENT_DATES}"
+  fi
+fi
+
+NEWEST_ACTIVITY=""
+if [ -n "$ALL_DATES" ]; then
+  NEWEST_ACTIVITY=$(echo "$ALL_DATES" | grep -v '^$' | sort -r | head -1 || true)
+fi
+
+# Fall back to issue updated_at if no activity found
+if [ -z "$NEWEST_ACTIVITY" ]; then
+  NEWEST_ACTIVITY=$(echo "$ISSUE_JSON" | jq -r '.updated_at // .created_at')
+fi
+
+# ---- Assemble output ---------------------------------------------------------
+
+# Convert newline-delimited JSON objects to arrays
+COMMENTS_ARRAY="[]"
+if [ -n "$COMMENTS" ]; then
+  COMMENTS_ARRAY=$(echo "$COMMENTS" | jq -s 'sort_by(.date)')
+fi
+
+EVENTS_ARRAY="[]"
+if [ -n "$EVENTS" ]; then
+  EVENTS_ARRAY=$(echo "$EVENTS" | jq -s 'sort_by(.date)')
+fi
+
+# Build final JSON
+jq -n \
+  --argjson metadata "$METADATA" \
+  --argjson comments "$COMMENTS_ARRAY" \
+  --argjson events "$EVENTS_ARRAY" \
+  --argjson pr_specific "$PR_SPECIFIC" \
+  --arg newest_activity "$NEWEST_ACTIVITY" \
+  --arg is_pr "$IS_PR" \
+  --arg owner_repo "$OWNER_REPO" \
+  --arg number "$NUMBER" \
+  '{
+    owner_repo: $owner_repo,
+    number: ($number | tonumber),
+    is_pr: ($is_pr == "true"),
+    metadata: $metadata,
+    comments: $comments,
+    events: $events,
+    pr_specific: $pr_specific,
+    newest_activity: $newest_activity,
+    comment_count: ($comments | length),
+    event_count: ($events | length)
+  }'

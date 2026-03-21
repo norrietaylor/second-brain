@@ -1,0 +1,12 @@
+filters: file.inFolder("04 Data")
+views:
+  - type: table
+    name: All Notes
+    order:
+      - file.name
+      - type
+      - file.ctime
+      - file.mtime
+    sort:
+      - property: file.mtime
+        direction: DESC

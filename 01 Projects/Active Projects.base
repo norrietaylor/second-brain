@@ -1,0 +1,17 @@
+filters:
+  and:
+    - type == "project"
+    - status == "active"
+views:
+  - type: table
+    name: Active Projects
+    order:
+      - file.name
+      - name
+      - status
+      - next_action
+      - due
+      - file.mtime
+    sort:
+      - property: file.mtime
+        direction: DESC

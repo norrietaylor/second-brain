@@ -1,0 +1,24 @@
+filters: type == "github"
+views:
+  - type: table
+    name: All
+    order:
+      - file.name
+      - gh_state
+      - gh_title
+      - gh_repo
+      - gh_updated_at
+    sort:
+      - property: gh_updated_at
+        direction: DESC
+  - type: table
+    name: Open
+    filters: gh_state == "open"
+    order:
+      - file.name
+      - gh_title
+      - gh_repo
+      - gh_updated_at
+    sort:
+      - property: gh_updated_at
+        direction: DESC

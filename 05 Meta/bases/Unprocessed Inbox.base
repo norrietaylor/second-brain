@@ -1,0 +1,15 @@
+filters:
+  and:
+    - 'type == "inbox"'
+    - 'status == "unprocessed"'
+
+views:
+  - type: table
+    name: Unprocessed
+    order:
+      - file.name
+      - status
+      - file.ctime
+    sort:
+      - property: file.ctime
+        direction: ASC

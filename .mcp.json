@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "slack": {
+      "type": "sse",
+      "url": "http://localhost:13080/sse"
+    }
+  }
+}

@@ -1,0 +1,30 @@
+views:
+  - type: table
+    name: Today
+    filters:
+      or:
+        - and:
+            - type == "meeting"
+            - date == today()
+        - and:
+            - type == "task"
+            - status != "done"
+            - due <= today()
+        - and:
+            - type == "project"
+            - status == "active"
+        - and:
+            - type == "inbox"
+            - status == "needs_review"
+    order:
+      - file.name
+      - type
+      - due
+      - status
+      - priority
+      - next_action
+    sort:
+      - property: due
+        direction: ASC
+      - property: date
+        direction: ASC

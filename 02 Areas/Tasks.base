@@ -1,0 +1,15 @@
+filters:
+  and:
+    - type == "task"
+    - status != "done"
+views:
+  - type: table
+    name: Open Tasks
+    order:
+      - file.name
+      - status
+      - due
+      - file.mtime
+    sort:
+      - property: due
+        direction: ASC

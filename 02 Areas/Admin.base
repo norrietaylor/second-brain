@@ -1,0 +1,11 @@
+filters: type == "admin"
+views:
+  - type: table
+    name: Admin
+    order:
+      - file.name
+      - file.ctime
+      - file.mtime
+    sort:
+      - property: file.mtime
+        direction: DESC

@@ -1,0 +1,25 @@
+filters: type == "person"
+views:
+  - type: table
+    name: People
+    order:
+      - file.name
+      - name
+      - context
+      - last_touched
+      - follow_ups
+    sort:
+      - property: last_touched
+        direction: DESC
+  - type: table
+    name: With Follow-ups
+    filters: follow_ups != null
+    order:
+      - file.name
+      - name
+      - context
+      - last_touched
+      - follow_ups
+    sort:
+      - property: last_touched
+        direction: DESC

@@ -1,0 +1,26 @@
+filters: type == "meeting"
+views:
+  - type: table
+    name: All
+    order:
+      - file.name
+      - meeting_name
+      - date
+      - attendees
+      - is_1on1
+      - summary
+    sort:
+      - property: date
+        direction: DESC
+  - type: table
+    name: Today
+    filters: date == today()
+    order:
+      - file.name
+      - meeting_name
+      - date
+      - attendees
+      - is_1on1
+    sort:
+      - property: date
+        direction: ASC

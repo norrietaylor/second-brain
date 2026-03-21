@@ -1,0 +1,145 @@
+#!/bin/bash
+# sb-ingest — Import markdown files from the Second Brain inbox drop folder
+#
+# Usage:
+#   sb-ingest              — import all files from the drop folder
+#   sb-ingest --dry-run    — list files without importing
+#
+# Moves .md files from ~/second-brain-inbox/ into the vault's inbox
+# (04 Data/YYYY/MM/) as unprocessed inbox items for /eod to classify.
+#
+# Configuration:
+#   SECOND_BRAIN_VAULT  — vault path (default: ~/Documents/git/me/second-brain)
+#   SECOND_BRAIN_NAME   — vault name for Obsidian CLI (default: second-brain)
+#   SECOND_BRAIN_INBOX  — drop folder (default: ~/second-brain-inbox)
+
+set -euo pipefail
+
+VAULT="${SECOND_BRAIN_VAULT:-$HOME/Documents/obsidian/second-brain}"
+VAULT_NAME="${SECOND_BRAIN_NAME:-second-brain}"
+INBOX="${SECOND_BRAIN_INBOX:-$HOME/second-brain-inbox}"
+
+DRY_RUN=false
+if [ "${1:-}" = "--dry-run" ]; then
+    DRY_RUN=true
+fi
+
+# Check if drop folder exists
+if [ ! -d "$INBOX" ]; then
+    # No inbox folder — nothing to do
+    exit 0
+fi
+
+# Find markdown files in the drop folder
+FILES=()
+for file in "$INBOX"/*.md; do
+    [ -f "$file" ] || continue
+    FILES+=("$file")
+done
+
+if [ ${#FILES[@]} -eq 0 ]; then
+    exit 0
+fi
+
+echo "Found ${#FILES[@]} file(s) in inbox drop folder"
+
+if [ "$DRY_RUN" = true ]; then
+    for file in "${FILES[@]}"; do
+        echo "  $(basename "$file")"
+    done
+    echo "Run without --dry-run to import."
+    exit 0
+fi
+
+# Require Obsidian CLI for vault operations
+if ! command -v obsidian &> /dev/null; then
+    echo "Error: Obsidian CLI required. Install: https://obsidian.md/cli" >&2
+    exit 1
+fi
+
+YEAR=$(date +%Y)
+MONTH=$(date +%m)
+NOW=$(date +"%Y-%m-%d %H:%M")
+IMPORTED=0
+
+for file in "${FILES[@]}"; do
+    filename=$(basename "$file")
+
+    # Read the file content
+    content=$(cat "$file")
+
+    # Check if the file already has frontmatter
+    if echo "$content" | head -1 | grep -q "^---$"; then
+        # Has frontmatter — ensure required fields exist
+        has_type=$(echo "$content" | sed -n '1,/^---$/p' | tail -n +2 | grep -m1 "^type:" || true)
+        has_created=$(echo "$content" | sed -n '1,/^---$/p' | tail -n +2 | grep -m1 "^created:" || true)
+        has_modified=$(echo "$content" | sed -n '1,/^---$/p' | tail -n +2 | grep -m1 "^modified:" || true)
+
+        # Build lines to inject before the closing ---
+        inject=""
+        if [ -z "$has_type" ]; then
+            inject="${inject}type: inbox\n"
+        fi
+        inject="${inject}status: unprocessed\n"
+        if [ -z "$has_created" ]; then
+            inject="${inject}created: \"$NOW\"\n"
+        fi
+        if [ -z "$has_modified" ]; then
+            inject="${inject}modified: \"$NOW\"\n"
+        fi
+
+        # Inject missing fields before the closing --- of frontmatter
+        # Use awk to find the second --- (closing) and insert before it
+        content=$(echo "$content" | awk -v inject="$inject" '
+            BEGIN { count=0 }
+            /^---$/ {
+                count++
+                if (count == 2) {
+                    printf "%s", inject
+                }
+            }
+            { print }
+        ')
+    else
+        # No frontmatter — wrap with inbox frontmatter
+        first_line=$(echo "$content" | head -1)
+        content="---
+type: inbox
+status: unprocessed
+created: \"$NOW\"
+modified: \"$NOW\"
+original_text: \"${first_line:0:100}\"
+---
+$content"
+    fi
+
+    # Determine target path in the vault
+    target_path="04 Data/$YEAR/$MONTH/$filename"
+
+    # Check if a file with this name already exists
+    if [ -f "$VAULT/$target_path" ]; then
+        # Append timestamp to avoid collision
+        base="${filename%.md}"
+        ts=$(date +%H%M%S)
+        target_path="04 Data/$YEAR/$MONTH/${base}-${ts}.md"
+    fi
+
+    # Create the note via Obsidian CLI
+    CLI_OUTPUT=$(obsidian "vault=$VAULT_NAME" create "path=$target_path" "content=$content" silent 2>&1) || true
+
+    if [ -f "$VAULT/$target_path" ]; then
+        rm -f "$file"
+        echo "  Imported: $filename → $target_path"
+        IMPORTED=$((IMPORTED + 1))
+    else
+        echo "  Failed: $filename — Obsidian CLI error" >&2
+        echo "  $CLI_OUTPUT" >&2
+    fi
+done
+
+if [ "$IMPORTED" -gt 0 ]; then
+    cd "$VAULT"
+    git add -A
+    git commit -m "sb: ingest — imported $IMPORTED file(s) from inbox drop folder"
+    echo "Imported $IMPORTED file(s)"
+fi

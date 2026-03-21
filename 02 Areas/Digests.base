@@ -1,0 +1,24 @@
+filters: type == "digest"
+views:
+  - type: table
+    name: Digests
+    order:
+      - file.name
+      - digest_type
+      - period_start
+      - period_end
+      - file.mtime
+    sort:
+      - property: period_end
+        direction: DESC
+  - type: table
+    name: Recent
+    filters: period_end >= today() - dur("45d")
+    order:
+      - file.name
+      - digest_type
+      - period_start
+      - period_end
+    sort:
+      - property: period_end
+        direction: DESC
