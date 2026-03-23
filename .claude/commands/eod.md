@@ -32,10 +32,11 @@ Initialize tracking variables for the commit message:
 - `dirty_count` = 0
 - `meeting_summary_count` = 0
 - `github_done_count` = 0
+- `slack_channel_count` = 0
 - `commit_details` = [] (list of action strings for the commit body)
 
-Pre-read shared configuration once (reuse for all classify invocations in this run):
-- `05 Meta/config.yaml` — confidence threshold
+Pre-read shared configuration once (reuse for all steps in this run):
+- `05 Meta/config.yaml` — confidence threshold, slack denylist
 - `05 Meta/context/tags.md` — tag taxonomy
 
 ### Step 0.5: Ingest External Inbox
