@@ -1,5 +1,5 @@
 ---
-modified: 2026-03-20T10:07:53-07:00
+modified: 2026-03-22 00:00
 ---
 # CLAUDE.md
 
@@ -41,6 +41,8 @@ All notes live in `04 Data/YYYY/MM/` regardless of type. The `02 Areas/*.base` f
 ### Universal Frontmatter Fields (all note types)
 - `type` — dispatches to schema
 - `created` / `modified` — datetime strings (`YYYY-MM-DD HH:mm`)
+  - The "Update frontmatter modified date" Obsidian plugin manages `modified` **only when editing inside Obsidian's UI** (editor keystrokes). It does NOT fire on CLI writes.
+  - **When Claude creates or modifies a note via the `obsidian` CLI, it must set `modified` manually** to the current timestamp. Failure to do so means the `Modified Today` base will show stale data.
 - `aliases` — kebab-case name without date prefix
 - `classified_at` / `confidence` — system-managed classification metadata
 
@@ -144,3 +146,14 @@ Note: The vault may not always have git initialized.
 7. **Mark done** — all notifications marked done via `gh_mark_done.sh` with thread IDs
 
 GitHub vault notes (`type: github`) have append-only Activity Summaries and a user-owned My Notes section that automation never touches.
+
+## GitLab Sync Architecture
+
+For GitLab instances, use the `gl-onmyplate` skill (`.claude/skills/gl-onmyplate/`). It mirrors the `gh-onmyplate` workflow but targets a self-hosted GitLab via `glab` CLI.
+
+- **Discovery** — `gl_notifications.sh` (todos), `gl_involved.sh` (open MRs/issues), `gl_my_mrs.sh` (authored MRs)
+- **Thread context** — `gl_thread_context.sh <url>` fetches the relevant tail of any MR or issue
+- **Mark done** — `gl_mark_done.sh TODO_ID PROJECT TYPE TITLE URL`
+- **Host config** — auto-detects the authenticated self-hosted instance from the glab config file; override with `GL_HOST` in `scripts/config.sh`
+
+GitLab todos are not stored as vault notes by default — use `gl-onmyplate` for triage and briefing during `/today` or on demand.
