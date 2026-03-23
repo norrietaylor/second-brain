@@ -179,6 +179,174 @@ find_by_granola_id() {
         || true
 }
 
+# Search for an existing person note by name (case-insensitive) or by alias (kebab-case).
+# Uses full-text search to find candidates then filters by frontmatter.
+# Returns the vault-relative path (e.g. "04 Data/2026/01/2026.01.10-alice-smith.md") if found,
+# or empty string if not found.
+find_person_note() {
+    local display_name="$1"
+    local kebab="$2"
+
+    # Do a full-text search for the name, then check each candidate's frontmatter
+    local candidates
+    candidates=$(obsidian "vault=$VAULT_NAME" search "query=$display_name" path="04 Data" format=json 2>/dev/null \
+        | grep -o '"[^"]*\.md"' | sed 's/"//g' || true)
+
+    if [ -z "$candidates" ]; then
+        # Also try alias search
+        candidates=$(obsidian "vault=$VAULT_NAME" search "query=$kebab" path="04 Data" format=json 2>/dev/null \
+            | grep -o '"[^"]*\.md"' | sed 's/"//g' || true)
+    fi
+
+    while IFS= read -r candidate_path; do
+        [ -z "$candidate_path" ] && continue
+        local candidate_full="$VAULT/$candidate_path"
+        [ -f "$candidate_full" ] || continue
+
+        local cand_content
+        cand_content=$(cat "$candidate_full" 2>/dev/null || true)
+
+        # Must be type: person
+        local cand_type
+        cand_type=$(fm_get "type" "$cand_content")
+        [ "$cand_type" = "person" ] || continue
+
+        # Check name field (case-insensitive)
+        local cand_name
+        cand_name=$(fm_get "name" "$cand_content" | tr -d '"')
+        if echo "$cand_name" | grep -qi "^${display_name}$"; then
+            echo "$candidate_path"
+            return
+        fi
+
+        # Check aliases field for kebab match
+        if echo "$cand_content" | awk '
+            /^---$/ { count++; next }
+            count >= 2 { exit }
+            count == 1 && /^aliases:/ { in_aliases=1; next }
+            count == 1 && in_aliases && /^[[:space:]]*-/ {
+                val=$0; gsub(/^[[:space:]]*-[[:space:]]*/, "", val); gsub(/"/, "", val); print val; next
+            }
+            count == 1 && in_aliases && /^[^[:space:]]/ { in_aliases=0 }
+        ' | grep -q "^${kebab}$"; then
+            echo "$candidate_path"
+            return
+        fi
+    done <<< "$candidates"
+}
+
+# Create a minimal person stub note.
+# Usage: create_person_stub "Bob Jones" "2026-03-22" "weekly-sync" "2026.03.22-weekly-sync"
+create_person_stub() {
+    local display_name="$1"
+    local meeting_date="$2"        # YYYY-MM-DD
+    local meeting_name_val="$3"    # kebab meeting name (for context text)
+    local meeting_filename="$4"    # YYYY.MM.DD-meeting-name (for wiki-link)
+
+    local kebab
+    kebab=$(kebab_name "$display_name")
+
+    local year="${meeting_date:0:4}"
+    local month="${meeting_date:5:2}"
+    local day="${meeting_date:8:2}"
+    local date_dots="${year}.${month}.${day}"
+    local stub_rel="04 Data/${year}/${month}/${date_dots}-${kebab}.md"
+
+    # Collision avoidance: if the path already exists, it may be a different person
+    local suffix=1
+    while [ -f "$VAULT/$stub_rel" ]; do
+        suffix=$((suffix + 1))
+        stub_rel="04 Data/${year}/${month}/${date_dots}-${kebab}-${suffix}.md"
+    done
+
+    local stub_content="---
+type: person
+name: \"${display_name}\"
+context: \"Met in ${meeting_name_val} meeting\"
+last_touched: \"${meeting_date}\"
+aliases:
+  - \"${kebab}\"
+created: \"${NOW}\"
+modified: \"${NOW}\"
+classified_at: \"${NOW}\"
+confidence: 0.8
+---
+
+## Notes
+
+Auto-created from Granola meeting [[${meeting_filename}|${meeting_name_val}]]"
+
+    mkdir -p "$VAULT/04 Data/${year}/${month}"
+    obsidian "vault=$VAULT_NAME" create "path=$stub_rel" "content=$stub_content" silent >/dev/null 2>&1 || true
+
+    if [ -f "$VAULT/$stub_rel" ]; then
+        echo "$stub_rel"
+    fi
+}
+
+# Update last_touched on an existing person note if the meeting date is newer.
+# Usage: update_last_touched "04 Data/2026/01/2026.01.10-alice-smith.md" "2026-03-22"
+update_last_touched() {
+    local person_path="$1"
+    local meeting_date="$2"
+
+    local existing_content
+    existing_content=$(cat "$VAULT/$person_path" 2>/dev/null || true)
+    local current_lt
+    current_lt=$(fm_get "last_touched" "$existing_content" | tr -d '"')
+
+    # Compare dates lexicographically (YYYY-MM-DD format sorts correctly)
+    if [[ "$meeting_date" > "$current_lt" ]]; then
+        obsidian "vault=$VAULT_NAME" property:set "path=$person_path" name=last_touched "value=$meeting_date" >/dev/null 2>&1 || true
+        obsidian "vault=$VAULT_NAME" property:set "path=$person_path" name=modified "value=$NOW" >/dev/null 2>&1 || true
+    fi
+}
+
+# Rewrite the ## Attendees section in a meeting note with wiki-links.
+# Usage: rewrite_attendees_section "04 Data/2026/03/2026.03.22-weekly-sync.md" "wiki-link-list-one-per-line"
+rewrite_attendees_section() {
+    local note_path="$1"
+    local wikilinks_block="$2"   # newline-separated wiki-link lines
+
+    local full_path="$VAULT/$note_path"
+    if [ ! -f "$full_path" ]; then
+        return
+    fi
+
+    # Write note content to a temp file for Python to process
+    local tmp_in tmp_out
+    tmp_in=$(mktemp)
+    tmp_out=$(mktemp)
+    cat "$full_path" > "$tmp_in"
+
+    # Use Python to replace the ## Attendees section (handles multiline cleanly)
+    python3 - "$tmp_in" "$tmp_out" "$wikilinks_block" <<'PYEOF'
+import sys, re
+
+input_file  = sys.argv[1]
+output_file = sys.argv[2]
+new_links   = sys.argv[3]
+
+with open(input_file, 'r') as f:
+    content = f.read()
+
+new_section = '## Attendees\n\n' + new_links + '\n'
+
+# Replace ## Attendees section (up to next ## heading or end of file)
+pattern = r'## Attendees\n.*?(?=\n## |\Z)'
+new_content = re.sub(pattern, new_section.rstrip('\n'), content, flags=re.DOTALL)
+
+with open(output_file, 'w') as f:
+    f.write(new_content)
+PYEOF
+
+    if [ -s "$tmp_out" ]; then
+        # Write updated content directly to the file (obsidian create won't overwrite)
+        cp "$tmp_out" "$full_path"
+    fi
+    rm -f "$tmp_in" "$tmp_out"
+}
+
 # Read series_overrides from config.yaml as "title|meeting_name" pairs (one per line)
 get_series_overrides() {
     awk '
@@ -292,6 +460,8 @@ NOW=$(date +"%Y-%m-%d %H:%M")
 INGESTED=0
 SKIPPED=0
 INGESTED_NAMES=()
+PERSON_STUBS_CREATED=()
+PERSON_STUBS_NAMES=()
 
 for file in "${FILES[@]}"; do
     filename=$(basename "$file")
@@ -428,6 +598,73 @@ ${body}"
         echo "  Ingested: $title → $target_path"
         INGESTED=$((INGESTED + 1))
         INGESTED_NAMES+=("$meeting_name")
+
+        # --- Person stub creation and attendee wiki-linking ---
+        # Derive the meeting filename for wiki-links (strip extension from basename)
+        meeting_basename=$(basename "$target_path" .md)
+
+        ATTENDEE_WIKILINKS=()
+        for att_display in "${ATTENDEE_NAMES[@]}"; do
+            # Skip self
+            if [ "$att_display" = "$SELF_NAME" ]; then
+                ATTENDEE_WIKILINKS+=("$att_display")
+                continue
+            fi
+
+            att_kebab=$(kebab_name "$att_display")
+
+            # Check if name already is a wiki-link (plugin may have pre-linked it)
+            # In that case strip_wikilink was already applied, but the raw value had [[...]]
+            # We look for the raw attendee value in the original list to detect this
+            raw_match=""
+            while IFS= read -r raw_val; do
+                stripped=$(strip_wikilink "$raw_val")
+                if [ "$stripped" = "$att_display" ] && echo "$raw_val" | grep -q '\[\['; then
+                    raw_match="$raw_val"
+                    break
+                fi
+            done <<< "$raw_attendees_list"
+
+            # Search for existing person note
+            person_path=$(find_person_note "$att_display" "$att_kebab")
+
+            if [ -n "$person_path" ]; then
+                # Found existing person note — update last_touched if needed
+                update_last_touched "$person_path" "$date"
+                # Extract filename without extension for wiki-link
+                person_basename=$(basename "$person_path" .md)
+                ATTENDEE_WIKILINKS+=("[[${person_basename}|${att_display}]]")
+            elif [ -n "$raw_match" ]; then
+                # Pre-linked by plugin (wiki-link already in source), no stub needed
+                # Extract the existing wiki-link as-is for the section
+                ATTENDEE_WIKILINKS+=("$raw_match")
+            else
+                # No existing person note — create a stub
+                stub_path=$(create_person_stub "$att_display" "$date" "$meeting_name" "$meeting_basename")
+                if [ -n "$stub_path" ]; then
+                    stub_basename=$(basename "$stub_path" .md)
+                    ATTENDEE_WIKILINKS+=("[[${stub_basename}|${att_display}]]")
+                    PERSON_STUBS_CREATED+=("$stub_path")
+                    PERSON_STUBS_NAMES+=("$att_kebab")
+                    echo "    Created person stub: $stub_path"
+                else
+                    # Stub creation failed — use plain name
+                    ATTENDEE_WIKILINKS+=("$att_display")
+                fi
+            fi
+        done
+
+        # Rewrite ## Attendees section with wiki-links
+        if [ ${#ATTENDEE_WIKILINKS[@]} -gt 0 ]; then
+            wikilinks_block=""
+            for wl in "${ATTENDEE_WIKILINKS[@]}"; do
+                wikilinks_block="${wikilinks_block}- ${wl}
+"
+            done
+            # Remove trailing newline
+            wikilinks_block="${wikilinks_block%$'\n'}"
+            rewrite_attendees_section "$target_path" "$wikilinks_block"
+        fi
     else
         echo "  Failed: $filename — Obsidian CLI error" >&2
         echo "  $CLI_OUTPUT" >&2
@@ -446,4 +683,9 @@ fi
 if [ $INGESTED -gt 0 ]; then
     names_joined=$(IFS=', '; echo "${INGESTED_NAMES[*]}")
     echo "Ingested ${INGESTED} meeting(s): ${names_joined}"
+fi
+
+if [ ${#PERSON_STUBS_CREATED[@]} -gt 0 ]; then
+    stubs_joined=$(IFS=', '; echo "${PERSON_STUBS_NAMES[*]}")
+    echo "Created ${#PERSON_STUBS_CREATED[@]} person stub(s): ${stubs_joined}"
 fi

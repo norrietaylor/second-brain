@@ -1,0 +1,26 @@
+Type: cli
+Command: obsidian property:set (set last_touched to 2026-01-10), then granola-ingest (meeting date 2026-03-22)
+Expected: last_touched updated to 2026-03-22 when meeting date is newer
+Timestamp: 2026-03-23T07:01:24Z
+Status: PASS
+
+--- Alice Proof person note after last_touched update ---
+---
+type: person
+name: Alice Proof
+context: Met in sprint-planning meeting
+last_touched: 2026-03-22
+aliases:
+  - alice-proof
+created: 2026-03-23 00:00
+modified: 2026-03-23 00:01
+classified_at: 2026-03-23 00:00
+confidence: 0.8
+---
+
+## Notes
+
+Auto-created from Granola meeting [[2026.03.22-sprint-planning|sprint-planning]]
+=== Verification: last_touched field ===
+last_touched: 2026-03-22
+=> last_touched is 2026-03-22 (updated from 2026-01-10) — PASS

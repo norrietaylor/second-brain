@@ -1,0 +1,40 @@
+Type: file
+Description: Person stub created for unknown attendee with correct frontmatter
+Expected: type:person, name, context, last_touched, aliases, confidence:0.8
+Timestamp: 2026-03-23T07:01:08Z
+Status: PASS
+
+--- Person stub: Alice Proof ---
+---
+type: person
+name: Alice Proof
+context: Met in sprint-planning meeting
+last_touched: 2026-03-22
+aliases:
+  - alice-proof
+created: 2026-03-23 00:00
+modified: 2026-03-23 00:01
+classified_at: 2026-03-23 00:00
+confidence: 0.8
+---
+
+## Notes
+
+Auto-created from Granola meeting [[2026.03.22-sprint-planning|sprint-planning]]
+--- Person stub: Carlos Test ---
+---
+type: person
+name: "Carlos Test"
+context: "Met in sprint-planning meeting"
+last_touched: "2026-03-22"
+aliases:
+  - "carlos-test"
+created: "2026-03-23 00:00"
+modified: "2026-03-23 00:00"
+classified_at: "2026-03-23 00:00"
+confidence: 0.8
+---
+
+## Notes
+
+Auto-created from Granola meeting [[2026.03.22-sprint-planning|sprint-planning]]

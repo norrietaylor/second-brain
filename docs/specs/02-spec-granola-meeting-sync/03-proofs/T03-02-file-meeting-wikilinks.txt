@@ -1,0 +1,36 @@
+Type: file
+Description: Meeting note Attendees section contains wiki-links to person notes
+Expected: [[YYYY.MM.DD-person|Name]] format in ## Attendees section
+Timestamp: 2026-03-23T07:01:17Z
+Status: PASS
+
+--- Meeting note: Sprint Planning (04 Data/2026/03/2026.03.22-sprint-planning.md) ---
+---
+type: meeting
+meeting_name: "sprint-planning"
+date: "2026-03-22"
+attendees:
+  - "Mack"
+  - "Alice Proof"
+  - "Carlos Test"is_1on1: false
+granola_id: "proof-stubs-001"
+granola_url: "https://granola.ai/m/proof-stubs-001"
+source: granola
+start_time: "09:00"
+tags: []
+aliases:
+  - "sprint-planning"
+created: "2026-03-23 00:00"
+modified: "2026-03-23 00:00"
+classified_at: "2026-03-23 00:00"
+confidence: 1.0
+---
+
+## Attendees
+
+- Mack
+- [[2026.03.22-alice-proof|Alice Proof]]
+- [[2026.03.22-carlos-test|Carlos Test]]
+## Log
+
+Sprint planning notes.
