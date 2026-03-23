@@ -1,0 +1,12 @@
+Type: cli
+Command: grep -n "### Step 5.5" .claude/commands/eod.md
+Expected: Step 5.5 heading exists between Step 5 and Step 6
+Timestamp: 2026-03-22T00:00:00Z
+
+=== OUTPUT ===
+272:### Step 5.5: Slack Activity Summary
+
+=== RESULT ===
+Status: PASS
+
+Step 5.5 heading found at line 272, between Step 5 (ends line 270) and Step 6 (starts line 360).

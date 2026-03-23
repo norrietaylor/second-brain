@@ -1,0 +1,16 @@
+Type: cli
+Command: grep -n "slack_read_user_profile\|slack_search_public_and_private\|slack_search_channels\|slack_read_channel\|slack_read_thread" .claude/commands/eod.md
+Expected: All five MCP tool names referenced exactly
+Timestamp: 2026-03-22T00:00:00Z
+
+=== OUTPUT ===
+279:slack_read_user_profile(user_id: "me")
+295:   slack_search_public_and_private(query: "from:<@USER_ID> after:YESTERDAY_DATE")
+300:   slack_search_channels(query: "active recent")
+315:   slack_read_channel(channel_id: CHANNEL_ID, limit: 50)
+322:   slack_read_thread(channel_id: CHANNEL_ID, thread_ts: MESSAGE_TS)
+
+=== RESULT ===
+Status: PASS
+
+All five required MCP tool names are referenced: slack_read_user_profile, slack_search_public_and_private, slack_search_channels, slack_read_channel, slack_read_thread.

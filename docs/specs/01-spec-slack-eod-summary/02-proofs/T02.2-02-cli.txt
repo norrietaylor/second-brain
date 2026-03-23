@@ -1,0 +1,15 @@
+Type: cli
+Command: grep -n "5\.5[abcd]\." .claude/commands/eod.md
+Expected: All four sub-sections (5.5a, 5.5b, 5.5c, 5.5d) present
+Timestamp: 2026-03-22T00:00:00Z
+
+=== OUTPUT ===
+274:**5.5a. MCP Detection:**
+289:**5.5b. Channel Discovery:**
+309:**5.5c. Channel Summarization:**
+333:**5.5d. Daily Note Integration:**
+
+=== RESULT ===
+Status: PASS
+
+All four required sub-sections are present: MCP Detection, Channel Discovery, Channel Summarization, Daily Note Integration.
