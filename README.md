@@ -1,3 +1,6 @@
+---
+modified: 2026-03-21T19:11:24-07:00
+---
 # Second Brain
 
 An Obsidian vault structured as a personal knowledge management system, powered by Claude Code automation. Notes are organized by type (not folder) using frontmatter-driven Bases views, with CLI commands for daily workflows.
@@ -22,7 +25,7 @@ Install via Obsidian Settings > Community Plugins:
 - **Bases** (core, enable in Core Plugins)
 - **Templater** by SilentVoid
 - **Update frontmatter modified date** by Alan Grainger
-
+	
 ## Setup
 
 ### 1. Clone and open the vault
