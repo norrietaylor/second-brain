@@ -1,0 +1,11 @@
+Type: cli
+Command: obsidian vault=second-brain plugins:enabled filter=community
+Expected: make-it-rain and obsidian42-brat listed as enabled
+Timestamp: 2026-03-23T00:15:00Z
+
+Output:
+granola-meetings-simple-sync
+make-it-rain
+obsidian42-brat
+
+Status: PASS

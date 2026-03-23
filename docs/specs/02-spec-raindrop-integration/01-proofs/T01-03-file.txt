@@ -1,0 +1,23 @@
+Type: file
+Path: .obsidian/plugins/make-it-rain/data.json
+Expected: Template produces type: inbox, status: unprocessed, source: raindrop frontmatter
+Timestamp: 2026-03-23T00:15:00Z
+
+Verified fields in defaultTemplate:
+- type: inbox ✓
+- status: unprocessed ✓
+- source: raindrop ✓
+- raindrop_id: {{id}} ✓
+- raindrop_type: "{{renderedType}}" ✓
+- url: "{{link}}" ✓
+- original_text: "{{title}}" ✓
+- created/modified mapped ✓
+- tags passed through ✓
+- collection mapped ✓
+
+All 6 content type templates (link, article, image, video, document, audio) verified with same vault-compatible frontmatter.
+
+defaultFolder: "04 Data"
+fileNameTemplate: "rd-{{title}}"
+
+Status: PASS
