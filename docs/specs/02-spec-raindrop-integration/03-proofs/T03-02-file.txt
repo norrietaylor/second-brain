@@ -1,0 +1,12 @@
+Type: file
+Path: .claude/commands/eod.md
+Expected: Day Summary template includes ### Raindrop Inbox subsection with format rule
+Timestamp: 2026-03-23T01:15:00Z
+
+Verified additions:
+1. ### Raindrop Inbox subsection added between ### GitHub Activity and ### Housekeeping
+2. Format rule added: "Raindrop Inbox: only if unprocessed Raindrop items exist. Query Raindrop Inbox.base..."
+3. Existing Step 1 (Process Inbox) handles Raindrop items via standard pipeline (type: inbox, status: unprocessed)
+4. source: raindrop preserved during classification (additive migration per classify skill)
+
+Status: PASS
