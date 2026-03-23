@@ -1,0 +1,17 @@
+Type: file
+Command: cat /Users/mackh/Sites/second-brain/second-brain/05\ Meta/config.yaml
+Expected: File contains classification section with confidence_threshold: 0.6, followed by slack section with denylist array containing random, social, watercooler, and a comment about future extensibility
+Timestamp: 2026-03-22T00:00:00Z
+
+Output:
+classification:
+  confidence_threshold: 0.6
+
+slack:
+  denylist:
+    - random
+    - social
+    - watercooler
+  # future: harvest_api_key, harvest_project_map, etc.
+
+Status: PASS
