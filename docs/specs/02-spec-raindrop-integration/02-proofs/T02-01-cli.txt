@@ -1,0 +1,9 @@
+Type: cli
+Command: obsidian vault=second-brain base:query path="05 Meta/bases/Raindrop Inbox.base" format=json | python3 -c "import sys,json; data=json.load(sys.stdin); print(f'{len(data)} items found')"
+Expected: Non-zero count of Raindrop inbox items
+Timestamp: 2026-03-23T01:00:00Z
+
+Output:
+107 items found
+
+Status: PASS
