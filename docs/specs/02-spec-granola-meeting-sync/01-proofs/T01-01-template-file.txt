@@ -1,0 +1,57 @@
+Type: file
+Description: Verify that 05 Meta/templates/Granola.md exists with all required template variables
+Expected: Template file exists and contains all required variables
+Timestamp: 2026-03-22T10:00:00Z
+
+=== TEMPLATE FILE LOCATION ===
+Path: 05 Meta/templates/Granola.md
+Status: EXISTS
+
+=== FRONTMATTER VARIABLES ===
+Required variable: granola_id
+Found: {{granola_id}} ✓
+
+Required variable: title
+Found: {{title}} ✓
+
+Required variable: date
+Found: {{date}} ✓
+
+Required variable: granola_url
+Found: {{granola_url}} ✓
+
+Required variable: start_time
+Found: {{start_time}} ✓
+
+Required variable: created
+Found: {{created}} ✓
+
+Required variable: source (literal value)
+Found: source: granola ✓
+
+=== ATTENDEES VARIABLE ===
+Required: granola_attendees_linked_list for attendees field
+Found in frontmatter: attendees: {{granola_attendees_linked_list}} ✓
+
+=== BODY SECTIONS ===
+Required section: ## Attendees
+Found: ## Attendees ✓
+
+Required section: ## Log with callout wrapper
+Found: > [!warning] Private Notes with {{#granola_private_notes}}...{{/granola_private_notes}} ✓
+
+Required section: Collapsed callout for Granola AI Summary
+Found: > [!note]- Granola AI Summary with {{#granola_notes}}...{{/granola_notes}} ✓
+
+Required section: Collapsed callout for Transcript
+Found: > [!note]- Transcript with {{#granola_transcript}}...{{/granola_transcript}} ✓
+
+=== PLUGIN SYNTAX VERIFICATION ===
+Uses {{variable}} syntax: ✓
+Uses {{#variable}}...{{/variable}} syntax: ✓
+Does NOT contain Templater <% delimiters: ✓
+
+=== VERIFICATION RESULT ===
+Status: PASS
+All required template variables present and correctly formatted.
+Template uses plugin syntax (not Templater syntax) as specified.
