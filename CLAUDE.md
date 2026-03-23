@@ -92,6 +92,7 @@ Slash commands are defined in `.claude/commands/<name>.md`:
 | `05 Meta/scripts/gh-fetch` | Fetch GitHub issue/PR data as JSON | `gh-fetch <url> [--since <ISO-date>]` |
 | `05 Meta/scripts/sb-ingest` | Import files from `~/second-brain-inbox/` drop folder | `sb-ingest [--dry-run]` |
 | `05 Meta/scripts/calculate_dates.py` | Date utility (runs on session start via hook) | Auto-invoked |
+| `05 Meta/scripts/granola-ingest` | Transform staged Granola notes into meeting notes | `granola-ingest [--dry-run]` |
 | `05 Meta/scripts/sync-memory.sh` | Sync Claude memory files | Manual |
 
 ## Bases Views (02 Areas/)
@@ -114,6 +115,7 @@ System bases in `05 Meta/bases/`: Unprocessed Inbox, Dirty Notes, Modified Today
 - **Bases** (core) — Frontmatter-driven database views
 - **Templater** (community) — Template folder: `05 Meta/templates`
 - **Update frontmatter modified date** (community) — Format: `YYYY-MM-DD HH:mm`, excludes `05 Meta`
+- **Granola Sync** ([philfreo/obsidian-granola-plugin](https://github.com/philfreo/obsidian-granola-plugin)) — Syncs Granola meetings to `Granola/` staging folder. See [Granola Meeting Sync](#granola-meeting-sync).
 
 ## Permissions
 
@@ -144,3 +146,87 @@ Note: The vault may not always have git initialized.
 7. **Mark done** — all notifications marked done via `gh_mark_done.sh` with thread IDs
 
 GitHub vault notes (`type: github`) have append-only Activity Summaries and a user-owned My Notes section that automation never touches.
+
+## Granola Meeting Sync
+
+Granola (granola.ai) meetings are synced into the vault via a two-stage pipeline: an Obsidian plugin handles API polling, and a bash script transforms the output into proper second-brain notes.
+
+### Setup (one-time)
+
+1. **Install the plugin** — [philfreo/obsidian-granola-plugin](https://github.com/philfreo/obsidian-granola-plugin) (manual install or community catalog). Desktop only.
+2. **Authenticate** — Open Obsidian Settings → Granola Sync → click "Connect to Granola". Complete the OAuth flow in the browser.
+3. **Configure the plugin settings:**
+   - **Template path**: `05 Meta/templates/Granola.md`
+   - **Folder path**: `Granola` (staging folder — the ingest script moves notes out of here)
+   - **Filename pattern**: `{date} {title}`
+   - **Sync frequency**: `15m` (or preference — `1m` to `12h`, or `manual`)
+   - **Sync time range**: `last_30_days`
+   - **Match attendees by email**: `enabled` (links attendees to person notes with `emails` frontmatter)
+   - **Include full transcript**: `enabled` (optional — set to preference)
+   - **Skip existing notes**: `enabled`
+4. **Configure your name** — Edit `05 Meta/config.yaml`:
+   ```yaml
+   granola:
+     self_name: "Your Name"    # excluded from attendee counts for 1-on-1 detection
+     staging_folder: "Granola"  # must match plugin folder path
+     series_overrides: {}       # optional: "Meeting Title": "forced-meeting-name"
+   ```
+5. **Add email to person notes** — For attendee auto-linking to work, add `emails` to existing person notes:
+   ```yaml
+   emails:
+     - alice@company.com
+   ```
+   The plugin matches attendee emails against this field and creates `[[wiki-links]]` automatically.
+
+### How It Works
+
+```
+Granola app → plugin polls MCP API → Granola/ staging folder
+                                          ↓
+                              /eod Step 0.75 (or manual)
+                              runs: granola-ingest
+                                          ↓
+                              For each staged note:
+                                1. Parse frontmatter (granola_id, title, date, attendees)
+                                2. Derive meeting_name from title (strip dates, kebab-case)
+                                3. Check series_overrides in config
+                                4. Detect 1-on-1 (1 attendee excluding self → is_1on1: true)
+                                5. Dedup by granola_id (skip if already in vault)
+                                6. Create meeting note in 04 Data/YYYY/MM/
+                                7. Create person stubs for unknown attendees
+                                8. Update last_touched for known attendees
+                                9. Rewrite ## Attendees with [[wiki-links]]
+                               10. Delete staging file
+                                          ↓
+                              /eod Steps 3+5 handle summary + daily note
+```
+
+### Manual Run
+
+```bash
+"05 Meta/scripts/granola-ingest"            # process staged notes
+"05 Meta/scripts/granola-ingest" --dry-run  # preview without writing
+```
+
+### Meeting Name Derivation
+
+The `meeting_name` field (used for grouping recurring meetings) is derived by:
+1. Checking `granola.series_overrides` in config for an exact title match
+2. Stripping trailing date patterns (`- March 22`, `(2026-03-22)`), ordinals (`5th`), numbers (`#5`, `v3.2`)
+3. Kebab-casing the remainder (`Weekly Team Standup` → `weekly-team-standup`)
+
+For meetings that normalize incorrectly, add an override:
+```yaml
+granola:
+  series_overrides:
+    "Client ABC / Sprint Review": "client-abc-sprint-review"
+```
+
+### Meeting Note Layout
+
+Granola-sourced meetings follow the standard `type: meeting` schema with extras:
+- `source: granola` and `granola_id` in frontmatter (for dedup and filtering)
+- `## Log` contains the user's private notes from Granola
+- `> [!note]- Granola AI Summary` — collapsed callout with AI-generated content
+- `> [!note]- Transcript` — collapsed callout with full transcript (if enabled)
+- `/eod` Step 3 generates `## Summary` from the Log content, same as manual meetings

@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-VAULT="${SECOND_BRAIN_VAULT:-$HOME/Documents/obsidian/second-brain}"
+VAULT="${SECOND_BRAIN_VAULT:-$HOME/Sites/second-brain/second-brain}"
 VAULT_NAME="${SECOND_BRAIN_NAME:-second-brain}"
 INBOX="${SECOND_BRAIN_INBOX:-$HOME/second-brain-inbox}"
 

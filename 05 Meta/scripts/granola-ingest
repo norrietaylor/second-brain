@@ -22,7 +22,7 @@ set -euo pipefail
 
 # ---- Configuration -----------------------------------------------------------
 
-VAULT="${SECOND_BRAIN_VAULT:-$HOME/Documents/obsidian/second-brain}"
+VAULT="${SECOND_BRAIN_VAULT:-$HOME/Sites/second-brain/second-brain}"
 VAULT_NAME="${SECOND_BRAIN_NAME:-second-brain}"
 CONFIG_FILE="$VAULT/05 Meta/config.yaml"
 
@@ -571,7 +571,8 @@ type: meeting
 meeting_name: \"${meeting_name}\"
 date: \"${date}\"
 attendees:
-$(printf '%b' "$ATTENDEES_YAML")is_1on1: ${IS_1ON1}
+$(printf '%b' "$ATTENDEES_YAML")
+is_1on1: ${IS_1ON1}
 granola_id: \"${granola_id}\"
 granola_url: \"${granola_url}\"
 source: granola
