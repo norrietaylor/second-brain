@@ -10,6 +10,7 @@ An Obsidian vault structured as a personal knowledge management system, powered 
 | [Obsidian CLI](https://obsidian.md/cli) (v1.12+) | Vault operations from terminal | See Obsidian docs |
 | [Claude Code](https://claude.ai/code) | AI-powered commands (`/today`, `/eod`, etc.) | `npm install -g @anthropic-ai/claude-code` |
 | [GitHub CLI](https://cli.github.com) (`gh`) | GitHub sync | `brew install gh` |
+| [GitLab CLI](https://gitlab.com/gitlab-org/cli) (`glab`) | GitLab sync (optional) | `brew install glab` |
 | [jq](https://jqlang.github.io/jq/) | JSON processing in scripts | `brew install jq` |
 | [Python 3](https://www.python.org) | Date calculation script | Ships with macOS |
 | [Docker](https://www.docker.com) | Slack MCP server (optional) | `brew install --cask docker` |
@@ -113,3 +114,58 @@ See [CLAUDE.md](CLAUDE.md) for full system documentation: type dispatch, file na
 | `/learned` | Capture context at end of a work session |
 | `/gh-import` | Import or update a specific GitHub issue/PR |
 | `/generate-digests` | Backfill missing weekly/monthly digests |
+| `/gh-onmyplate` | GitHub plate check — notifications, open threads, your PRs |
+| `/gl-onmyplate` | GitLab plate check — todos, open threads, your MRs |
+| `/session-log` | Capture session context for Second Brain ingestion |
+
+### Skills: Platform Plate Checks
+
+`gh-onmyplate` and `gl-onmyplate` are Claude Code skills that surface what needs your attention on GitHub and GitLab respectively. Each bundles a set of shell scripts that query the platform APIs from different angles, then synthesize a briefing grouped by action needed.
+
+#### `gl-onmyplate` — GitLab
+
+Five scripts for self-hosted or gitlab.com instances. Auto-detects the GitLab host from `glab` CLI config.
+
+| Script | Purpose |
+|---|---|
+| `gl_notifications.sh` | Pending todos (GitLab inbox) — @mentions, assignments, review/approval requests |
+| `gl_involved.sh` | All open MRs and issues where you're author, assignee, or reviewer |
+| `gl_my_mrs.sh` | Your open MRs with pipeline status and last note |
+| `gl_thread_context.sh` | Relevant tail of a specific MR or issue thread with action hint |
+| `gl_mark_done.sh` | Mark a todo as done with audit log |
+
+**Configuration** — edit `.claude/skills/gl-onmyplate/scripts/config.sh`:
+- `GL_HOST` — self-hosted hostname (blank = auto-detect from glab config)
+- `IGNORE_REVIEW_GROUPS` — namespace paths to filter out team-only review requests
+- `FILTER_MERGED_REVIEWED` — filter merged MRs from todos (default: `true`)
+
+**Prerequisites:** `glab` CLI authenticated, `jq`, `curl`.
+
+#### `gh-onmyplate` — GitHub
+
+Four scripts plus a mark-done action for GitHub notifications and threads.
+
+| Script | Purpose |
+|---|---|
+| `gh_notifications.sh` | New activity from GitHub notification inbox (unread/read) |
+| `gh_involved.sh` | All open issues and PRs you're involved in |
+| `gh_my_prs.sh` | Your open PRs with last post summary |
+| `gh_thread_context.sh` | Relevant tail of a specific issue/PR thread with action hint |
+| `gh_mark_done.sh` | Mark a notification thread as done with audit log |
+
+**Configuration** — edit `.claude/skills/gh-onmyplate/scripts/config.sh`:
+- `IGNORE_REVIEW_TEAMS` — `org/team-slug` entries to filter team-only review requests
+- `FILTER_MERGED_REVIEWED` — filter merged PRs from notifications (default: `true`)
+
+**Prerequisites:** `gh` CLI authenticated with `repo` and `notifications` scopes, `jq`.
+
+#### Timespan parameter
+
+All discovery scripts accept an optional timespan: `3d`, `7d` (default), `2w`, `1m`, `1y`. For `*_my_prs.sh`/`*_my_mrs.sh`, the default is `1y`.
+
+#### Workflow
+
+Both skills follow the same pattern:
+1. **Discover** — run the three discovery scripts to find threads from different angles
+2. **Dig in** — use `*_thread_context.sh` on threads that need more context
+3. **Synthesize** — present a briefing grouped into "needs your response", "your open PRs/MRs — status", and "no action needed (FYI)"
