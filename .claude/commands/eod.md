@@ -659,6 +659,7 @@ git commit -m "sb: /eod — processed N inbox, M dirty checks, S meeting summari
 Build the summary line dynamically:
 - Always: `processed N inbox, M dirty checks, S meeting summaries, enriched daily note`
 - If `github_done_count` > 0: append `, G github tasks completed`
+- If `slack_channel_count` > 0: append `, S slack channels summarized`
 - If weekly: append `+ weekly`
 - If monthly: append `+ monthly`
 - If yearly: append `+ yearly`
