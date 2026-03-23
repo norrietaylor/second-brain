@@ -33,6 +33,7 @@ Initialize tracking variables for the commit message:
 - `meeting_summary_count` = 0
 - `github_done_count` = 0
 - `slack_channel_count` = 0
+- `granola_ingest_count` = 0
 - `commit_details` = [] (list of action strings for the commit body)
 
 Pre-read shared configuration once (reuse for all steps in this run):
@@ -48,6 +49,22 @@ Import any files from the external drop folder before processing:
 ```
 
 This picks up session logs and other captures written by agents in other projects. Files are moved into `04 Data/YYYY/MM/` as unprocessed inbox items that Step 1 will classify. If the drop folder is empty or doesn't exist, this is a no-op.
+
+### Step 0.75: Ingest Granola Meetings
+
+Process any staged Granola meeting notes and transform them into second-brain meeting notes:
+
+```bash
+"05 Meta/scripts/granola-ingest"
+```
+
+This script reads Granola markdown files from the staging folder (configured in `05 Meta/config.yaml`), derives meeting metadata, creates properly-typed `type: meeting` notes in `04 Data/YYYY/MM/`, and deletes the staging files on success. The created meeting notes will be processed by Step 3 (Meeting Summary Generation) and Step 5 (Enrich Daily Note) automatically.
+
+Capture the script's output (number of meetings ingested) and:
+- Increment `granola_ingest_count` by the number of meetings processed
+- Add to `commit_details`: `granola: ingested N meetings` (or if N=0, add nothing)
+
+If the staging folder is empty or doesn't exist, this is a no-op.
 
 ### Step 1: Process Inbox
 
@@ -658,6 +675,7 @@ git commit -m "sb: /eod — processed N inbox, M dirty checks, S meeting summari
 
 Build the summary line dynamically:
 - Always: `processed N inbox, M dirty checks, S meeting summaries, enriched daily note`
+- If `granola_ingest_count` > 0: append `, G granola meetings ingested`
 - If `github_done_count` > 0: append `, G github tasks completed`
 - If `slack_channel_count` > 0: append `, S slack channels summarized`
 - If weekly: append `+ weekly`
