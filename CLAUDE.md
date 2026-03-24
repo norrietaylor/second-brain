@@ -20,7 +20,7 @@ second-brain/
 └── 05 Meta/               ← System files
     ├── bases/             ← Programmatic bases (Unprocessed Inbox, Dirty Notes, Modified Today)
     ├── claude/            ← Type schemas (<type>.claude.md)
-    ├── config.yaml        ← confidence_threshold: 0.6
+    ├── config.yaml        ← classification, slack, granola settings
     ├── context/           ← work-profile.md, current-priorities.md, tags.md
     ├── templates/         ← Templater templates
     ├── logs/inbox-log.md  ← Classification audit trail
@@ -78,11 +78,12 @@ Slash commands are defined in `.claude/commands/<name>.md`:
 | Command | Purpose | Weight |
 |---------|---------|--------|
 | `/today` | Morning briefing + daily note + GitHub sync | Heavy (queries 3+ bases, runs GitHub discovery, marks notifications) |
-| `/eod` | End-of-day processing (inbox, dirty detection, meeting summaries, digest enrichment) | Heavy |
+| `/eod` | End-of-day processing (inbox, dirty detection, meeting summaries, Slack activity, digest enrichment) | Heavy |
 | `/meeting` | Create meeting note from natural language | Light |
 | `/learned` | End-of-session context capture | Light |
 | `/gh-import` | Import or update a single GitHub issue/PR | Medium |
 | `/generate-digests` | Backfill missing digests for date range | Heavy |
+| `/slack:my-activity` | Slack activity report with time estimates per channel | Medium |
 
 ## Scripts
 
@@ -92,6 +93,7 @@ Slash commands are defined in `.claude/commands/<name>.md`:
 | `05 Meta/scripts/sb-ingest` | Import files from `~/second-brain-inbox/` drop folder | `sb-ingest [--dry-run]` |
 | `05 Meta/scripts/calculate_dates.py` | Date utility (runs on session start via hook) | Auto-invoked |
 | `05 Meta/scripts/granola-ingest` | Transform staged Granola notes into meeting notes | `granola-ingest [--dry-run]` |
+| `05 Meta/scripts/slack-my-activity` | Slack activity report with session-based time estimates | `slack-my-activity [YYYY-MM-DD] [--json]` |
 | `05 Meta/scripts/sync-memory.sh` | Sync Claude memory files | Manual |
 
 ## Bases Views (02 Areas/)
@@ -240,3 +242,65 @@ For GitLab instances, use the `gl-onmyplate` skill (`.claude/skills/gl-onmyplate
 - **Host config** — auto-detects the authenticated self-hosted instance from the glab config file; override with `GL_HOST` in `scripts/config.sh`
 
 GitLab todos are not stored as vault notes by default — use `gl-onmyplate` for triage and briefing during `/today` or on demand.
+
+## Slack Activity & Time Estimates
+
+Tracks personal Slack activity (messages sent, reactions placed) for a given day, groups by channel, clusters into sessions, and estimates time spent. Designed for Harvest time entry.
+
+Full documentation: `05 Meta/claude/slack-activity.claude.md`
+
+### Data Sources (graceful degradation)
+
+| Source | Requires | Messages | Reactions | DM Names | Speed |
+|--------|----------|----------|-----------|----------|-------|
+| Direct API | `SLACK_USER_TOKEN` env | Yes (100/page) | Yes | Yes | Fast (1-2 calls) |
+| MCP fallback | Slack MCP plugin | Yes (20/page) | No | Yes | Slower (3+ calls) |
+
+### Setup
+
+One-time Slack app creation for Direct API mode:
+1. api.slack.com/apps → Create New App → From Scratch
+2. OAuth scopes: `search:read`, `reactions:read`, `users:read`
+3. Install to workspace → copy `xoxp-...` token
+4. `export SLACK_USER_TOKEN="xoxp-..."` in `~/.zshrc`
+
+Without the token, `/slack:my-activity` and `/eod` Step 5.5 fall back to the Slack MCP plugin automatically.
+
+### Session Configuration
+
+All parameters are tunable in `05 Meta/config.yaml`:
+
+```yaml
+slack:
+  activity:
+    session_gap_minutes: 15       # gap to split sessions
+    single_msg_minutes: 10        # lone authored message duration
+    reaction_msg_minutes: 5       # lone reaction-only duration
+    session_buffer_minutes: 5     # buffer on each end of multi-message sessions
+    round_to_minutes: 15          # Harvest-friendly rounding
+    timezone_offset_hours: -7     # PDT
+```
+
+CLI flags `--session-gap` and `--single-msg-time` override for a single run.
+
+### EOD Integration
+
+`/eod` Step 5.5 appends Slack activity to the daily note with channel summaries and a collapsible time estimate table:
+
+```markdown
+### Slack Activity
+- **#channel-1** — topic summary
+- **#channel-2** — topic summary
+
+> [!note]- Time Estimates (N channels, Xh Ym)
+> | Channel | Sessions | Time |
+> |---------|----------|------|
+> | #channel-1 | 2 — 09:24 (1msg), 13:18-13:30 (4msg) | 45m |
+> | **Total** | | **Xh Ym** |
+```
+
+### Limitations
+
+- **Huddles**: Not accessible via Slack API. No endpoint exposes huddle participation or duration. Use Granola for meeting capture if running during huddles.
+- **Read-only channels**: Only channels where you posted or reacted are tracked. Passive reading is invisible to the API.
+- **MCP mode**: No reactions data, slower pagination, but works without any setup.

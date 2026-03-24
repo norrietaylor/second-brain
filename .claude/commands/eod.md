@@ -352,17 +352,45 @@ For each non-denied channel, process sequentially (to avoid rate limiting):
 
 Collect each channel summary as `{ channel_name, bullets }`.
 
-**5.5d. Daily Note Integration:**
+**5.5d. Personal Activity & Time Estimates:**
+
+After channel summarization, generate a personal activity time report. This degrades gracefully across three levels:
+
+1. **`SLACK_USER_TOKEN` is set** — run the script directly:
+   ```bash
+   "05 Meta/scripts/slack-my-activity" --json TODAY
+   ```
+   Parse the JSON output for the time report data.
+
+2. **No token, but MCP is available** — you already have the user's messages from Step 5.5b. Convert them to JSON lines and pipe to the script:
+   ```bash
+   echo '<json lines from MCP results>' | "05 Meta/scripts/slack-my-activity" --stdin TODAY
+   ```
+
+3. **Neither available** — skip the time report. Log: `slack time: skipped (no token or MCP)`
+
+**5.5e. Daily Note Integration:**
 
 If no channels have activity today, omit the Slack section entirely and skip the rest of this step.
 
-Otherwise, produce a `### Slack Activity` section formatted as:
+Otherwise, produce a `### Slack Activity` section with channel summaries and a collapsible time estimate drawer:
 
 ```markdown
 ### Slack Activity
 - **#channel-1** — [summary point], [summary point]
 - **#channel-2** — [summary point], [summary point]
+
+> [!note]- Time Estimates (N channels, Xh Ym)
+> | Channel | Sessions | Time |
+> |---------|----------|------|
+> | #channel-1 | 2 — 09:24 (1msg), 13:18-13:30 (4msg) | 45m |
+> | #channel-2 | 1 — 14:01-14:20 (5msg) | 30m |
+> | **Total** | | **Xh Ym** |
+>
+> *Session gap: 15min. Single-message: 10min. Rounded to 15min.*
 ```
+
+If the time report was not available (level 3 above), omit the callout entirely — just output the channel summaries.
 
 Insert this section into the Day Summary of the daily note:
 
@@ -377,7 +405,7 @@ obsidian vault=second-brain append path="<DAILY_NOTE_PATH>" content="<slack acti
 
 Set `slack_channel_count` to the number of channels summarized.
 
-Add to `commit_details`: `slack: summarized N channels (M denied)`
+Add to `commit_details`: `slack: summarized N channels (M denied)` and if time report was generated: `+ time estimates`
 
 ### Step 6: Generate Weekly Digest (Sundays only)
 
