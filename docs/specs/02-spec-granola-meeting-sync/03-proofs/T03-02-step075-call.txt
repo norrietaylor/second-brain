@@ -1,0 +1,37 @@
+Type: file
+File: .claude/commands/eod.md (Step 0.75)
+Description: Verify Step 0.75 calls granola-ingest without --dry-run flag
+Expected: Step 0.75 exists and calls "05 Meta/scripts/granola-ingest" (no --dry-run)
+Timestamp: 2026-03-23T12:00:00Z
+
+=== EXTRACTED CONTENT (Lines 53-67) ===
+### Step 0.75: Ingest Granola Meetings
+
+Process any staged Granola meeting notes and transform them into second-brain meeting notes:
+
+```bash
+"05 Meta/scripts/granola-ingest"
+```
+
+This script reads Granola markdown files from the staging folder (configured in `05 Meta/config.yaml`), derives meeting metadata, creates properly-typed `type: meeting` notes in `04 Data/YYYY/MM/`, and deletes the staging files on success. The created meeting notes will be processed by Step 3 (Meeting Summary Generation) and Step 5 (Enrich Daily Note) automatically.
+
+Capture the script's output (number of meetings ingested) and:
+- Increment `granola_ingest_count` by the number of meetings processed
+- Add to `commit_details`: `granola: ingested N meetings` (or if N=0, add nothing)
+
+If the staging folder is empty or doesn't exist, this is a no-op.
+
+=== VERIFICATION ===
+Status: PASS
+Step 0.75 is correctly positioned between Step 0.5 (Ingest External Inbox) and
+Step 1 (Process Inbox). The command at line 58 calls the granola-ingest script:
+  "05 Meta/scripts/granola-ingest"
+
+NO --dry-run flag is present. The script runs in production mode, ingesting
+granola meetings into the vault. The step correctly documents:
+- Where the script reads files (staging folder from config.yaml)
+- What it creates (type: meeting notes in 04 Data/YYYY/MM/)
+- What it does on success (deletes staging files)
+- How to capture output (number of meetings processed)
+- Update granola_ingest_count by meetings processed
+- Add summary to commit_details

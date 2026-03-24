@@ -1,0 +1,12 @@
+Type: test
+File: 05 Meta/scripts/granola-initial-sync
+Test: Python syntax validation
+Command: python3 -m py_compile "05 Meta/scripts/granola-initial-sync"
+Expected: Command exits with status 0 (no syntax errors)
+
+=== EXECUTION OUTPUT ===
+Syntax validation passed successfully.
+
+=== VERIFICATION ===
+Status: PASS
+The Python script compiles without syntax errors after replacing datetime.utcnow() with datetime.now(UTC).

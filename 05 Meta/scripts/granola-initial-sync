@@ -25,12 +25,12 @@ import sys
 import time
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import datetime, UTC
 from pathlib import Path
 
 # ---- Configuration ----------------------------------------------------------
 
-VAULT = os.environ.get("SECOND_BRAIN_VAULT", os.path.expanduser("~/Documents/obsidian/second-brain"))
+VAULT = os.environ.get("SECOND_BRAIN_VAULT", os.path.expanduser("~/Sites/second-brain/second-brain"))
 MCP_URL = "https://mcp.granola.ai/mcp"
 DEFAULT_DELAY = 3  # seconds between transcript API calls
 MAX_MEETINGS_PER_BATCH = 10
@@ -469,7 +469,7 @@ def main():
             "granola_date": date,
             "granola_url": f"https://notes.granola.ai/d/{mid}",
             "granola_start_time": start_time,
-            "granola_created": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "granola_created": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
             "granola_updated": "",
             "granola_private_notes": details["private_notes"],
             "granola_enhanced_notes": details["enhanced_notes"],

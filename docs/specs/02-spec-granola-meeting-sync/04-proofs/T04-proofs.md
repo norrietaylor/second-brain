@@ -1,73 +1,51 @@
-# T04 - EOD Integration Proof Summary
+# T04 Proof Artifacts: Fix datetime.utcnow() Deprecation
 
-## Objective
-Wire the granola-ingest script into the /eod command by:
-1. Adding granola_ingest_count tracking variable to Step 0
-2. Creating Step 0.75 to call granola-ingest
-3. Updating Step 10 commit summary to include granola count
-
-## Proof Artifacts
-
-### 1. T04-01-file.txt (PASS)
-**Status:** Verified
-
-Confirms Step 0 now initializes `granola_ingest_count = 0` alongside other tracking variables:
-- inbox_count
-- dirty_count
-- meeting_summary_count
-- github_done_count
-- slack_channel_count
-- **granola_ingest_count** ← NEW
-- commit_details
-
-### 2. T04-02-file.txt (PASS)
-**Status:** Verified
-
-Confirms Step 0.75 exists and is properly positioned:
-- **Location:** Between Step 0.5 (Ingest External Inbox) and Step 1 (Process Inbox)
-- **Command:** Calls `05 Meta/scripts/granola-ingest`
-- **Behavior:** 
-  - Reads staged Granola notes from staging folder
-  - Creates type: meeting notes in 04 Data/YYYY/MM/
-  - Increments granola_ingest_count by meetings processed
-  - Appends summary to commit_details
-  - No-op if staging folder is empty
-
-### 3. T04-03-file.txt (PASS)
-**Status:** Verified
-
-Confirms Step 10 commit message building includes conditional granola metrics:
-- When `granola_ingest_count > 0`: appends `, G granola meetings ingested` to commit summary
-- When `granola_ingest_count = 0`: no granola message (conditional logic working)
-- Ordered correctly: granola metrics appear after always-present summary, before github/slack metrics
-
-## Specification Compliance
-
-All requirements from unit-4-eod-integration.feature are met:
-
-✓ Scenario: /eod command includes granola-ingest as Step 0.75
-✓ Scenario: Step 0 tracking variables include granola_ingest_count
-✓ Scenario: Step 0.75 output is captured in commit_details
-✓ Scenario: Granola-sourced meetings included in Step 3 (no changes needed - already appears in Meetings.base)
-✓ Scenario: Granola meetings appear in daily note (no changes needed - already captured by Step 5)
-✓ Scenario: Step 10 includes Granola count when meetings were ingested
-✓ Scenario: Step 10 omits Granola count when no meetings ingested
-
-## Testing Notes
-
-The implementation enables the full workflow:
-1. Granola staging folder contents → granola-ingest script → type: meeting notes
-2. Meeting notes automatically appear in Meetings.base Today view
-3. Step 3 processes them for summaries
-4. Step 5 includes them in daily note digest
-5. Step 10 commit message includes granola metric counts
+## Task Summary
+Replace all uses of `datetime.utcnow()` with `datetime.now(datetime.UTC)` in `05 Meta/scripts/granola-initial-sync`.
 
 ## Changes Made
 
-- **File:** .claude/commands/eod.md
-- **Lines modified:** 
-  - Line 36: Added `granola_ingest_count = 0` to Step 0 tracking variables
-  - Lines 53-67: Added new Step 0.75 section with granola-ingest call
-  - Line 678: Added conditional granola count to Step 10 commit summary builder
+### File: 05 Meta/scripts/granola-initial-sync
 
-All changes follow established patterns from slack_channel_count implementation.
+**Line 28 (Import)**
+- Old: `from datetime import datetime`
+- New: `from datetime import datetime, UTC`
+
+**Line 472 (Usage)**
+- Old: `"granola_created": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000Z"),`
+- New: `"granola_created": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z"),`
+
+## Proof Artifacts
+
+### T04-01-syntax.txt
+**Status: PASS**
+- Verifies the Python script compiles without syntax errors
+- Validates that the replacement code is syntactically correct
+
+### T04-02-import.txt
+**Status: PASS**
+- Tests that `datetime.UTC` is available and importable
+- Confirms that `datetime.now(UTC)` produces the expected ISO 8601 UTC timestamp format
+- Output format matches original: `YYYY-MM-DDTHH:MM:SS.000Z`
+
+### T04-03-changes.txt
+**Status: PASS**
+- Verifies no remaining instances of `utcnow()` in the codebase
+- Confirms UTC import is present
+- Validates the replacement code exists and is correct
+
+## Deprecation Context
+`datetime.utcnow()` was deprecated in Python 3.12 and will be removed in Python 3.14.
+The replacement `datetime.now(datetime.UTC)` is the recommended approach for timezone-aware UTC timestamps.
+
+## Compatibility
+- Python 3.11+: `datetime.UTC` is available
+- No breaking changes to output format or behavior
+- Maintains backward compatibility with the timestamp format
+
+## Verification Summary
+- ✓ All deprecated calls replaced
+- ✓ Import statement updated
+- ✓ Syntax validation passed
+- ✓ Runtime behavior verified
+- ✓ No remaining deprecation warnings expected

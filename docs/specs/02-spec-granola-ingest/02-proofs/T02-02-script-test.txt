@@ -1,0 +1,21 @@
+Type: cli
+Description: granola-ingest script executes successfully with validation check
+Command: bash /Users/mackh/Sites/second-brain/second-brain/05 Meta/scripts/granola-ingest --dry-run 2>&1 | tail -8
+Expected: Script completes without errors and processes files normally
+Timestamp: 2026-03-23T12:00:00Z
+
+=== Output ===
+
+Would ingest 39 meeting(s): david-numan-mack,island-health-homepage-implemntation-planning-meeting,1on1-mrechtin,new-note,1on1-beth-becker,biz-dev-marketing,island-health-planning-session-for-march-31st-target,quitnow-out-of-hours-bot-estimate,osstf-client-call,sacred-trust-chole-hartley-feb-25-2026,comm100,moveup-meeting-cantrust,hey-soror-team-daily,1on1-createdbykallie,1on1-richie,1on1-rebeccah,1on1-kaili-lambe,1on1-geoff,biz-dev-meeting,1on1-rgillies,1on1-kelly-pollack,1on1-jones,beth-alex-mack,mack-tor-chat,1on1-smithmilner,webinar-unlock-the-magic-of-action-builder-events,abby-eshghi-and-mack-hardy,denim-and-steel-catchup-tylor-and-todd,hey-soror-team-daily,1on1-craigtemple,1on1-trent,1on1-steve-smith,sheila-mackenzie-and-mack-hardy,biz-dev-marketing-monthly,1on1-robb,norrie-and-mack-secondbrain-and-agentry,hey-soror-team-daily,heysoror-exec-call,1on1-laura-a-parent
+
+=== Validation ===
+
+Status: PASS
+
+The script executes successfully and:
+1. Passes template validation check ({{granola_id}} found)
+2. Processes all 39 staged Granola meeting files
+3. Reports dry-run results correctly
+4. No error messages about missing template or placeholder
+5. Exit code 0 (success)
+

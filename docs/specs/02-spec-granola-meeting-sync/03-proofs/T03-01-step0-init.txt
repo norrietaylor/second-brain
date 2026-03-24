@@ -1,0 +1,21 @@
+Type: file
+File: .claude/commands/eod.md (Step 0)
+Description: Verify granola_ingest_count is initialized in Step 0
+Expected: granola_ingest_count = 0 present in tracking variables list
+Timestamp: 2026-03-23T12:00:00Z
+
+=== EXTRACTED CONTENT (Lines 30-37) ===
+Initialize tracking variables for the commit message:
+- `inbox_count` = 0
+- `dirty_count` = 0
+- `meeting_summary_count` = 0
+- `github_done_count` = 0
+- `slack_channel_count` = 0
+- `granola_ingest_count` = 0
+- `commit_details` = [] (list of action strings for the commit body)
+
+=== VERIFICATION ===
+Status: PASS
+The granola_ingest_count variable is correctly initialized to 0 in Step 0's
+tracking variables section (line 36), alongside inbox_count, dirty_count,
+meeting_summary_count, github_done_count, and slack_channel_count.

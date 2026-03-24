@@ -1,0 +1,10 @@
+Type: file
+File: 05 Meta/scripts/granola-initial-sync
+Test: Verify default VAULT path updated
+Expected: VAULT = os.environ.get("SECOND_BRAIN_VAULT", os.path.expanduser("~/Sites/second-brain/second-brain"))
+Timestamp: 2026-03-23T00:00:00Z
+
+Result:
+VAULT = os.environ.get("SECOND_BRAIN_VAULT", os.path.expanduser("~/Sites/second-brain/second-brain"))
+
+Status: PASS

@@ -1,0 +1,28 @@
+Type: file
+Description: Template validation check in granola-ingest startup
+Command: grep -A7 "Validate template contains" /Users/mackh/Sites/second-brain/second-brain/05 Meta/scripts/granola-ingest
+Expected: Template validation code present checking for {{granola_id}} placeholder
+Timestamp: 2026-03-23T12:00:00Z
+
+=== Output ===
+
+# Validate template contains {{granola_id}} placeholder
+TEMPLATE_FILE="$VAULT/05 Meta/templates/Granola.md"
+if [ ! -f "$TEMPLATE_FILE" ]; then
+    die "Template file not found: 05 Meta/templates/Granola.md"
+fi
+if ! grep -q "{{granola_id}}" "$TEMPLATE_FILE"; then
+    die "Template file missing required {{granola_id}} placeholder: 05 Meta/templates/Granola.md"
+fi
+
+=== Validation ===
+
+Status: PASS
+
+The validation check:
+1. Verifies template file exists at 05 Meta/templates/Granola.md
+2. Checks that {{granola_id}} placeholder is present
+3. Exits with clear error message if missing (via die function)
+4. Runs at startup, before file processing loop
+5. Applies only to non-dry-run mode (check executes for both dry-run and actual)
+
