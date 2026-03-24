@@ -514,6 +514,15 @@ if [ "$DRY_RUN" = false ] && ! command -v obsidian &>/dev/null; then
     die "Obsidian CLI required. Install: https://obsidian.md/cli"
 fi
 
+# Validate template contains {{granola_id}} placeholder
+TEMPLATE_FILE="$VAULT/05 Meta/templates/Granola.md"
+if [ ! -f "$TEMPLATE_FILE" ]; then
+    die "Template file not found: 05 Meta/templates/Granola.md"
+fi
+if ! grep -q "{{granola_id}}" "$TEMPLATE_FILE"; then
+    die "Template file missing required {{granola_id}} placeholder: 05 Meta/templates/Granola.md"
+fi
+
 NOW=$(date +"%Y-%m-%d %H:%M")
 INGESTED=0
 SKIPPED=0
