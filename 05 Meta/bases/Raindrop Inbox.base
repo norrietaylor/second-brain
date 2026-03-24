@@ -1,0 +1,18 @@
+filters:
+  and:
+    - 'type == "inbox"'
+    - 'source == "raindrop"'
+    - 'status == "unprocessed"'
+
+views:
+  - type: table
+    name: Raindrop Inbox
+    order:
+      - file.name
+      - raindrop_type
+      - url
+      - tags
+      - file.ctime
+    sort:
+      - property: file.ctime
+        direction: DESC

@@ -222,6 +222,24 @@ Import any files from the external drop folder before scanning the vault:
 
 This picks up session logs and other captures written by agents in other projects. Files are moved into `04 Data/YYYY/MM/` as unprocessed inbox items. If the drop folder is empty or doesn't exist, this is a no-op.
 
+### Step 1.75: Sync Raindrop Bookmarks
+
+Trigger a make-it-rain sync to catch any bookmarks saved since the last sync:
+
+```bash
+obsidian vault=second-brain command id="make-it-rain:fetch-raindrops"
+```
+
+This fetches new Raindrop bookmarks and writes them as `type: inbox, status: unprocessed, source: raindrop` notes in `04 Data/`. They will be processed by `/eod` Step 1 (inbox classification).
+
+After the sync, query the Raindrop Inbox base for a count:
+
+```bash
+obsidian vault=second-brain base:query path="05 Meta/bases/Raindrop Inbox.base" format=json
+```
+
+Record the count as `raindrop_inbox_count` for the Step 4 briefing. If 0, skip the Raindrop section in the briefing.
+
 ### Step 2: Navigation Links + Vault Scan
 
 Find yesterday's daily note and add a navigation link to today's note (if not already present):
@@ -521,6 +539,8 @@ Daily note: [[YYYY.MM.DD-daily-note]]
 
 **GitHub — Review Requests (N):**
 - [ ] [**owner/repo#789** — context](URL) · [[YYYY.MM.DD-gh-repo-789|notes]]
+
+**Raindrop Inbox (N):** N bookmarks waiting for triage
 
 **Needs review (N):** note-name (0.43), other-note (0.51)
 

@@ -1,0 +1,26 @@
+Type: file
+Path: 05 Meta/bases/Raindrop Inbox.base
+Expected: Base filters for type==inbox AND source==raindrop AND status==unprocessed, sorts by ctime DESC
+Timestamp: 2026-03-23T01:00:00Z
+
+Content:
+filters:
+  and:
+    - 'type == "inbox"'
+    - 'source == "raindrop"'
+    - 'status == "unprocessed"'
+
+views:
+  - type: table
+    name: Raindrop Inbox
+    order:
+      - file.name
+      - raindrop_type
+      - url
+      - tags
+      - file.ctime
+    sort:
+      - property: file.ctime
+        direction: DESC
+
+Status: PASS

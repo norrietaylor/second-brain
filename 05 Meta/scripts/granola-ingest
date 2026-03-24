@@ -638,7 +638,8 @@ type: meeting
 meeting_name: \"${meeting_name}\"
 date: \"${date}\"
 attendees:
-$(printf '%b' "$ATTENDEES_YAML")is_1on1: ${IS_1ON1}
+$(printf '%b' "$ATTENDEES_YAML")
+is_1on1: ${IS_1ON1}
 granola_id: \"${granola_id}\"
 granola_url: \"${granola_url}\"
 source: granola

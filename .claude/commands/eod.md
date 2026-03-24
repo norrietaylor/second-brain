@@ -204,6 +204,10 @@ Read the current daily note content. Append the following digest sections to the
 ### GitHub Activity
 - [PR/issue activity from any github-type notes created today]
 
+### Raindrop Inbox
+- [title](url) — raindrop_type, tags
+- [title](url) — raindrop_type, tags
+
 ### Housekeeping
 - N inbox items classified, M dirty checks (K mismatches)
 - [If type_mismatches is non-empty:] Mismatch: **note-name** — current: _type_, suggested: _type_
@@ -227,6 +231,7 @@ Read the current daily note content. Append the following digest sections to the
 - **Meetings:** 2-5 sub-bullets per meeting, extracted from `## Log` and `## Action Items` sections
 - **Notes Created:** one line per note, grouped by type
 - **GitHub Activity:** only if github-type notes exist
+- **Raindrop Inbox:** only if unprocessed Raindrop items exist. Query `05 Meta/bases/Raindrop Inbox.base` and list each item as `- [title](url) — raindrop_type, tags`. Items will be classified by Step 1 in the next `/eod` run.
 - **Housekeeping:** always present (even if "0 inbox, 0 dirty")
 - **Open Threads:** see Step 5c below
 - **Tomorrow:** see Step 5d below — always present (3-5 actionable bullets)
