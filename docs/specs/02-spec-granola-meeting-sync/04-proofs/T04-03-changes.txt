@@ -1,0 +1,22 @@
+Type: file
+File: 05 Meta/scripts/granola-initial-sync
+Description: Verify all datetime.utcnow() calls have been replaced with datetime.now(UTC)
+Expected: No instances of 'utcnow' remain in the file, UTC import is present
+
+=== VERIFICATION COMMAND ===
+grep -n "utcnow" "05 Meta/scripts/granola-initial-sync" || echo "No utcnow found"
+Result: No utcnow found
+
+=== IMPORT VERIFICATION ===
+grep -n "from datetime import" "05 Meta/scripts/granola-initial-sync"
+Result: from datetime import datetime, UTC
+
+=== CODE CHANGE VERIFICATION ===
+grep -n "datetime.now(UTC)" "05 Meta/scripts/granola-initial-sync"
+Result: "granola_created": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+
+=== VERIFICATION ===
+Status: PASS
+All datetime.utcnow() calls have been successfully replaced with datetime.now(UTC).
+The UTC import has been added to the datetime import statement.
+The code maintains the same format string output (.000Z) for ISO 8601 UTC timestamps.

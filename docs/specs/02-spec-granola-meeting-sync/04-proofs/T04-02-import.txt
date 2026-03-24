@@ -1,0 +1,16 @@
+Type: cli
+Command: python3 << 'EOF'
+from datetime import datetime, UTC
+test_time = datetime.now(UTC)
+formatted = test_time.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+print(f"SUCCESS: {formatted}")
+EOF
+Expected: Output shows formatted UTC timestamp with no import errors
+
+=== EXECUTION OUTPUT ===
+SUCCESS: 2026-03-24T03:16:35.000Z
+
+=== VERIFICATION ===
+Status: PASS
+The datetime.UTC import is available and the datetime.now(UTC) call works correctly on Python 3.11+.
+The formatting matches the expected format from the original code.
