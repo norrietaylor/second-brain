@@ -11,7 +11,9 @@
       "Bash(*05 Meta/scripts/sb*)",
       "Bash(*05 Meta/scripts/vault-cleanup*)",
       "Bash(*05 Meta/scripts/gh-fetch*)",
-      "Bash(*05 Meta/scripts/sync-memory.sh*)"
+      "Bash(*05 Meta/scripts/sync-memory.sh*)",
+      "Bash(*05 Meta/scripts/granola-ingest*)",
+      "Bash(*05 Meta/scripts/granola-initial-sync*)"
     ],
     "deny": [
       "Bash(git push*)",

@@ -1,0 +1,10 @@
+Type: cli
+Command: bash -n 05 Meta/scripts/granola-ingest && python3 -m py_compile 05 Meta/scripts/granola-initial-sync && python3 -c "import json; json.load(open('.claude/settings.json'))"
+Test: Verify all files have correct syntax after modifications
+Expected: No syntax errors
+Timestamp: 2026-03-23T00:00:00Z
+
+Result:
+All syntax checks passed
+
+Status: PASS

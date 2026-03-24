@@ -1,0 +1,10 @@
+Type: file
+File: 05 Meta/scripts/granola-ingest
+Test: Verify default VAULT path updated
+Expected: VAULT="${SECOND_BRAIN_VAULT:-$HOME/Sites/second-brain/second-brain}"
+Timestamp: 2026-03-23T00:00:00Z
+
+Result:
+VAULT="${SECOND_BRAIN_VAULT:-$HOME/Sites/second-brain/second-brain}"
+
+Status: PASS

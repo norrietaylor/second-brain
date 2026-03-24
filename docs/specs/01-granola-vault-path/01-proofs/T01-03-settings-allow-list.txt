@@ -1,0 +1,11 @@
+Type: file
+File: .claude/settings.json
+Test: Verify granola-ingest and granola-initial-sync added to allow list
+Expected: Both scripts should appear in the permissions.allow array
+Timestamp: 2026-03-23T00:00:00Z
+
+Result:
+      "Bash(*05 Meta/scripts/granola-ingest*)",
+      "Bash(*05 Meta/scripts/granola-initial-sync*)"
+
+Status: PASS
