@@ -67,6 +67,45 @@ config_get() {
     fi
 }
 
+# Read a YAML list from config.yaml (two-level key, e.g. "granola.self_aliases")
+# Returns one item per line, quotes stripped.
+config_get_list() {
+    local key="$1"
+    local section="${key%%.*}"
+    local field="${key#*.}"
+
+    awk -v section="$section" -v field="$field" '
+        BEGIN { in_section=0; in_list=0 }
+        /^[a-zA-Z]/ { if (in_list) exit; in_section=($0 ~ "^"section":") }
+        in_section && $0 ~ "^[[:space:]]+"field":" {
+            # Check for inline list: field: [a, b, c]
+            if ($0 ~ /\[/) {
+                val = $0
+                sub(/^[^[]*\[/, "", val)
+                sub(/\].*$/, "", val)
+                n = split(val, parts, /,/)
+                for (i=1; i<=n; i++) {
+                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", parts[i])
+                    gsub(/"/, "", parts[i])
+                    if (parts[i] != "") print parts[i]
+                }
+                exit
+            }
+            in_list = 1
+            next
+        }
+        in_list && /^[[:space:]]*-[[:space:]]/ {
+            val = $0
+            sub(/^[[:space:]]*-[[:space:]]*/, "", val)
+            gsub(/"/, "", val)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
+            if (val != "") print val
+            next
+        }
+        in_list && /^[[:space:]]*[^-[:space:]]/ { exit }
+    ' "$CONFIG_FILE" 2>/dev/null || true
+}
+
 # Parse a frontmatter field from a staged file's content
 # Usage: fm_get "granola_id" "$content"
 fm_get() {
@@ -158,14 +197,14 @@ derive_meeting_name() {
     name=$(echo "$name" | tr ':/' '  ')
 
     # Kebab-case: lowercase, replace runs of non-alphanumeric (except hyphens) with "-"
-    name=$(echo "$name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-][^a-z0-9-]*/-/g; s/^-//; s/-$//')
+    name=$(echo "$name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-][^a-z0-9-]*/-/g; s/--*/-/g; s/^-//; s/-$//')
 
     echo "$name"
 }
 
 # Kebab-case a person's name for use in 1on1 meeting names and filenames
 kebab_name() {
-    echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-][^a-z0-9-]*/-/g; s/^-//; s/-$//'
+    echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-][^a-z0-9-]*/-/g; s/--*/-/g; s/^-//; s/-$//'
 }
 
 # Check if a vault note with the given granola_id already exists.
@@ -431,6 +470,25 @@ generate_target_path() {
 
 # Read config
 SELF_NAME=$(config_get "granola.self_name")
+
+# Build list of all self-name variants (lowercased) for matching
+SELF_NAMES_LOWER=()
+SELF_NAMES_LOWER+=("$(echo "$SELF_NAME" | tr '[:upper:]' '[:lower:]')")
+while IFS= read -r alias; do
+    [ -z "$alias" ] && continue
+    SELF_NAMES_LOWER+=("$(echo "$alias" | tr '[:upper:]' '[:lower:]')")
+done < <(config_get_list "granola.self_aliases")
+
+# Helper: returns 0 (true) if argument matches any self name/alias
+is_self() {
+    local name_lower
+    name_lower=$(echo "$1" | tr '[:upper:]' '[:lower:]')
+    for self_variant in "${SELF_NAMES_LOWER[@]}"; do
+        [ "$name_lower" = "$self_variant" ] && return 0
+    done
+    return 1
+}
+
 STAGING_FOLDER=$(config_get "granola.staging_folder")
 STAGING_FOLDER="${STAGING_FOLDER:-Granola}"
 STAGING_DIR="$VAULT/$STAGING_FOLDER"
@@ -504,10 +562,10 @@ for file in "${FILES[@]}"; do
     # 1. Check series_overrides
     meeting_name=$(lookup_series_override "$title")
 
-    # 2. Check 1-on-1 detection (excluding self)
+    # 2. Check 1-on-1 detection (excluding self via name + aliases)
     OTHER_ATTENDEES=()
     for att in "${ATTENDEE_NAMES[@]}"; do
-        [ "$att" = "$SELF_NAME" ] && continue
+        is_self "$att" && continue
         OTHER_ATTENDEES+=("$att")
     done
 
