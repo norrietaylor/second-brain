@@ -1,0 +1,10 @@
+Type: cli
+Command: obsidian vault=second-brain commands filter=make-it-rain
+Expected: fetch-raindrops and quick-import-raindrop commands available
+Timestamp: 2026-03-23T00:15:00Z
+
+Output:
+make-it-rain:fetch-raindrops
+make-it-rain:quick-import-raindrop
+
+Status: PASS

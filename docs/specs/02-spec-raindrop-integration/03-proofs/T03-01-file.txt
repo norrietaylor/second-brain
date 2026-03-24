@@ -1,0 +1,10 @@
+Type: file
+Path: .claude/commands/today.md
+Expected: Contains Step 1.75 for Raindrop sync and Raindrop Inbox count in briefing
+Timestamp: 2026-03-23T01:15:00Z
+
+Verified additions:
+1. Step 1.75: Sync Raindrop Bookmarks — triggers make-it-rain:fetch-raindrops, queries Raindrop Inbox base for count
+2. Step 4 briefing template includes "Raindrop Inbox (N): N bookmarks waiting for triage"
+
+Status: PASS
