@@ -32,10 +32,12 @@ Initialize tracking variables for the commit message:
 - `dirty_count` = 0
 - `meeting_summary_count` = 0
 - `github_done_count` = 0
+- `slack_channel_count` = 0
+- `granola_ingest_count` = 0
 - `commit_details` = [] (list of action strings for the commit body)
 
-Pre-read shared configuration once (reuse for all classify invocations in this run):
-- `05 Meta/config.yaml` — confidence threshold
+Pre-read shared configuration once (reuse for all steps in this run):
+- `05 Meta/config.yaml` — confidence threshold, slack denylist
 - `05 Meta/context/tags.md` — tag taxonomy
 
 ### Step 0.5: Ingest External Inbox
@@ -47,6 +49,22 @@ Import any files from the external drop folder before processing:
 ```
 
 This picks up session logs and other captures written by agents in other projects. Files are moved into `04 Data/YYYY/MM/` as unprocessed inbox items that Step 1 will classify. If the drop folder is empty or doesn't exist, this is a no-op.
+
+### Step 0.75: Ingest Granola Meetings
+
+Process any staged Granola meeting notes and transform them into second-brain meeting notes:
+
+```bash
+"05 Meta/scripts/granola-ingest"
+```
+
+This script reads Granola markdown files from the staging folder (configured in `05 Meta/config.yaml`), derives meeting metadata, creates properly-typed `type: meeting` notes in `04 Data/YYYY/MM/`, and deletes the staging files on success. The created meeting notes will be processed by Step 3 (Meeting Summary Generation) and Step 5 (Enrich Daily Note) automatically.
+
+Capture the script's output (number of meetings ingested) and:
+- Increment `granola_ingest_count` by the number of meetings processed
+- Add to `commit_details`: `granola: ingested N meetings` (or if N=0, add nothing)
+
+If the staging folder is empty or doesn't exist, this is a no-op.
 
 ### Step 1: Process Inbox
 
@@ -267,6 +285,94 @@ After enriching the daily note, process checked-off GitHub items:
    - Add to `commit_details`: `completed github task: gh-task-REPO-NUMBER`
 4. For **unchecked** items: no action (task stays pending, resurfaces in next `/today` briefing as overdue).
 5. If no `## GitHub` section exists or no items are checked, skip this step.
+
+### Step 5.5: Slack Activity Summary
+
+**5.5a. MCP Detection:**
+
+Attempt a lightweight Slack MCP call to detect whether the Slack MCP server is configured and available:
+
+```
+slack_read_user_profile(user_id: "me")
+```
+
+If the call fails for any reason (server not configured, authentication error, network error), skip the entire Step 5.5:
+
+- Log to `commit_details`: `slack: skipped (MCP not configured)`
+- Continue to Step 6
+
+No error should be raised — this is a graceful skip.
+
+**5.5b. Channel Discovery:**
+
+Use two complementary search strategies to find channels with relevant activity today. Compute `YESTERDAY_DATE` as `TODAY` minus one day (accounting for the after-midnight adjustment from Step 0 if applied).
+
+1. Search for channels where the user posted:
+   ```
+   slack_search_public_and_private(query: "from:<@USER_ID> after:YESTERDAY_DATE")
+   ```
+
+2. Search for channels with recent activity using broad activity terms:
+   ```
+   slack_search_channels(query: "active recent")
+   ```
+
+Combine results from both searches and extract unique channel names/IDs. Deduplicate by channel ID.
+
+Filter the discovered channels against the `slack.denylist` loaded in Step 0 — exclude any channel whose name or ID appears in the denylist.
+
+Log to `commit_details`: `slack: discovered N channels, M denied, processing K`
+
+**5.5c. Channel Summarization:**
+
+For each non-denied channel, process sequentially (to avoid rate limiting):
+
+1. Read recent messages from the channel:
+   ```
+   slack_read_channel(channel_id: CHANNEL_ID, limit: 50)
+   ```
+
+2. Filter to messages timestamped on `TODAY` only. If no messages today, skip this channel.
+
+3. For any message that has threaded replies, read the full thread:
+   ```
+   slack_read_thread(channel_id: CHANNEL_ID, thread_ts: MESSAGE_TS)
+   ```
+
+4. Generate a 3–5 bullet summary for the channel covering:
+   - Key topics discussed
+   - Decisions made
+   - Action items assigned
+   - Notable announcements
+
+Collect each channel summary as `{ channel_name, bullets }`.
+
+**5.5d. Daily Note Integration:**
+
+If no channels have activity today, omit the Slack section entirely and skip the rest of this step.
+
+Otherwise, produce a `### Slack Activity` section formatted as:
+
+```markdown
+### Slack Activity
+- **#channel-1** — [summary point], [summary point]
+- **#channel-2** — [summary point], [summary point]
+```
+
+Insert this section into the Day Summary of the daily note:
+
+- Insert between `### Meetings` and `### Notes Created`
+- If `### Notes Created` does not exist, insert after `### Meetings`
+
+Use `obsidian append` or rewrite the daily note content to include the section:
+
+```bash
+obsidian vault=second-brain append path="<DAILY_NOTE_PATH>" content="<slack activity section>"
+```
+
+Set `slack_channel_count` to the number of channels summarized.
+
+Add to `commit_details`: `slack: summarized N channels (M denied)`
 
 ### Step 6: Generate Weekly Digest (Sundays only)
 
@@ -569,7 +675,9 @@ git commit -m "sb: /eod — processed N inbox, M dirty checks, S meeting summari
 
 Build the summary line dynamically:
 - Always: `processed N inbox, M dirty checks, S meeting summaries, enriched daily note`
+- If `granola_ingest_count` > 0: append `, G granola meetings ingested`
 - If `github_done_count` > 0: append `, G github tasks completed`
+- If `slack_channel_count` > 0: append `, S slack channels summarized`
 - If weekly: append `+ weekly`
 - If monthly: append `+ monthly`
 - If yearly: append `+ yearly`

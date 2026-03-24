@@ -1,0 +1,24 @@
+Type: file
+Check: granola-ingest script exists, is executable, has bash strict mode
+Timestamp: 2026-03-23T06:52:51Z
+
+--- FILE EXISTENCE ---
+-rwxr-xr-x@ 1 mackh  staff  14856 Mar 22 23:51 05 Meta/scripts/granola-ingest
+
+--- EXECUTABLE CHECK ---
+PASS: File is executable
+
+--- STRICT MODE CHECK ---
+PASS: set -euo pipefail found (line 21)
+
+--- SYNTAX CHECK ---
+PASS: Syntax valid
+
+--- TITLE NORMALIZATION TESTS ---
+PASS: 'Weekly Sync - March 22' → 'weekly-sync'
+PASS: 'Sprint Planning #5' → 'sprint-planning'
+PASS: 'Design Review (2026-03-22)' → 'design-review'
+PASS: '1:1 with Alice' → '1-1-with-alice'
+PASS: 'Team Standup' → 'team-standup'
+
+Status: PASS

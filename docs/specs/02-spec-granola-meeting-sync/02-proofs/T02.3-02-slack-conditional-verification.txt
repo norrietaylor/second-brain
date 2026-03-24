@@ -1,0 +1,3 @@
+35:- `slack_channel_count` = 0
+356:Set `slack_channel_count` to the number of channels summarized.
+662:- If `slack_channel_count` > 0: append `, S slack channels summarized`

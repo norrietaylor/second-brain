@@ -1,0 +1,21 @@
+Type: file
+File: .claude/commands/eod.md
+Description: Step 10 commit summary conditionally includes granola_ingest_count
+Expected: Commit message includes "G granola meetings ingested" when count > 0
+
+=== Extracted Content (Step 10 Summary Line Building) ===
+Build the summary line dynamically:
+- Always: `processed N inbox, M dirty checks, S meeting summaries, enriched daily note`
+- If `granola_ingest_count` > 0: append `, G granola meetings ingested`
+- If `github_done_count` > 0: append `, G github tasks completed`
+- If `slack_channel_count` > 0: append `, S slack channels summarized`
+- If weekly: append `+ weekly`
+- If monthly: append `+ monthly`
+- If yearly: append `+ yearly`
+- If /learned ran: append `, /learned: updated <files>`
+
+=== VERIFICATION ===
+Status: PASS
+Step 10 now conditionally appends granola metrics to the commit message.
+When granola_ingest_count > 0, the commit summary includes "G granola meetings ingested".
+When granola_ingest_count = 0, no granola message is appended (as expected).

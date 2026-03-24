@@ -1,0 +1,9 @@
+Type: test
+Command: python3 -c "import yaml; config = yaml.safe_load(open('/Users/mackh/Sites/second-brain/second-brain/05 Meta/config.yaml')); assert 'classification' in config and config['classification']['confidence_threshold'] == 0.6; assert 'slack' in config and 'denylist' in config['slack']; assert config['slack']['denylist'] == ['random', 'social', 'watercooler']; print('All assertions passed')"
+Expected: YAML is valid with both classification and slack sections, denylist contains exactly ['random', 'social', 'watercooler']
+Timestamp: 2026-03-22T00:00:00Z
+
+Output:
+All assertions passed
+
+Status: PASS

@@ -1,0 +1,31 @@
+Type: cli
+Command: granola-ingest --dry-run (with multi-person + 1on1 test files)
+Expected: Shows planned transformations, meeting_name derivation, no files created
+Timestamp: 2026-03-23T06:52:29Z
+
+--- OUTPUT ---
+  [DRY-RUN] 1on1-test.md
+    title:        1:1 with Alice
+    meeting_name: 1on1-alice-smith
+    date:         2026-03-22
+    is_1on1:      true
+    target:       04 Data/2026/03/2026.03.22-1on1-alice-smith.md
+    granola_id:   test-002
+  [DRY-RUN] Weekly Sync - March 22.md
+    title:        Weekly Sync - March 22
+    meeting_name: weekly-sync
+    date:         2026-03-22
+    is_1on1:      false
+    target:       04 Data/2026/03/2026.03.22-weekly-sync.md
+    granola_id:   test-001
+Would ingest 2 meeting(s): 1on1-alice-smith,weekly-sync
+
+--- VERIFICATION ---
+Staged files still exist (no writes during dry-run):
+1on1-test.md
+Weekly Sync - March 22.md
+
+No files created in 04 Data (checking for new weekly-sync file):
+PASS: No files created
+
+Status: PASS

@@ -1,0 +1,28 @@
+Type: cli
+Command: git diff .claude/commands/eod.md
+Expected: Diff shows slack_channel_count variable added and slack denylist mentioned in config.yaml pre-read
+Timestamp: 2026-03-22T12:00:00Z
+
+GIT DIFF OUTPUT
+===============
+
+.claude/commands/eod.md
+  @@ -32,10 +32,11 @@
+  +- `slack_channel_count` = 0
+   - `commit_details` = [] (list of action strings for the commit body)
+   
+  -Pre-read shared configuration once (reuse for all classify invocations in this run):
+  -- `05 Meta/config.yaml` — confidence threshold
+  +Pre-read shared configuration once (reuse for all steps in this run):
+  +- `05 Meta/config.yaml` — confidence threshold, slack denylist
+   - `05 Meta/context/tags.md` — tag taxonomy
+   
+   ### Step 0.5: Ingest External Inbox
+  +3 -2
+
+STATUS: PASS ✓
+Both required changes are present in the diff:
+✓ Added: `- slack_channel_count = 0` (line 35 in file)
+✓ Updated: config.yaml pre-read now includes "slack denylist"
+✓ Updated: Comment text changed from "classify invocations" to "steps"
+✓ No other Step 0 content modified (Step 0.5 header untouched)

@@ -1,2 +1,16 @@
 classification:
   confidence_threshold: 0.6
+
+slack:
+  denylist:
+    - random
+    - social
+    - watercooler
+  # future: harvest_api_key, harvest_project_map, etc.
+
+granola:
+  self_name: "Mack Hardy"
+  self_aliases:
+    - "Mack"
+  staging_folder: "Granola"
+  series_overrides: {}

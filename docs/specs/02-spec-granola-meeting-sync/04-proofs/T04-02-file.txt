@@ -1,0 +1,26 @@
+Type: file
+File: .claude/commands/eod.md
+Description: Step 0.75 Ingest Granola Meetings is positioned between Step 0.5 and Step 1
+Expected: New step 0.75 calls granola-ingest script and updates granola_ingest_count
+
+=== Extracted Content (Step 0.75) ===
+### Step 0.75: Ingest Granola Meetings
+
+Process any staged Granola meeting notes and transform them into second-brain meeting notes:
+
+```bash
+"05 Meta/scripts/granola-ingest"
+```
+
+This script reads Granola markdown files from the staging folder (configured in `05 Meta/config.yaml`), derives meeting metadata, creates properly-typed `type: meeting` notes in `04 Data/YYYY/MM/`, and deletes the staging files on success. The created meeting notes will be processed by Step 3 (Meeting Summary Generation) and Step 5 (Enrich Daily Note) automatically.
+
+Capture the script's output (number of meetings ingested) and:
+- Increment `granola_ingest_count` by the number of meetings processed
+- Add to `commit_details`: `granola: ingested N meetings` (or if N=0, add nothing)
+
+If the staging folder is empty or doesn't exist, this is a no-op.
+
+=== VERIFICATION ===
+Status: PASS
+Step 0.75 is correctly positioned after Step 0.5 (sb-ingest) and before Step 1 (Process Inbox).
+It calls the granola-ingest script and captures output to update granola_ingest_count.
