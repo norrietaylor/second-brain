@@ -1,0 +1,535 @@
+#!/usr/bin/env python3
+# ============================================================================
+# slack-my-activity — Fetch Slack activity for a day, estimate time per channel
+# ============================================================================
+#
+# Usage:
+#   slack-my-activity [YYYY-MM-DD]        # defaults to today
+#   slack-my-activity --json [YYYY-MM-DD] # output as JSON (for piping to harvest)
+#
+# Modes:
+#   1. Direct API (preferred) — uses SLACK_USER_TOKEN env var
+#   2. MCP passthrough — reads pre-fetched messages from stdin as JSON lines
+#      Each line: {"channel":"#name","channel_id":"C123","ts":1774283074.451769,"text":"..."}
+#
+# Output: structured report grouped by channel with session-based time estimates
+# ============================================================================
+
+import sys
+import os
+import json
+import urllib.request
+import urllib.parse
+from datetime import datetime, timedelta, timezone
+from collections import defaultdict
+from pathlib import Path
+import math
+import argparse
+
+# --- Configuration defaults (overridden by config.yaml) ---
+SLACK_USER_ID = os.environ.get("SLACK_USER_ID", "U03G8EUL4")
+
+# Defaults — these are used if config.yaml is missing or incomplete
+DEFAULTS = {
+    "session_gap_minutes": 15,
+    "single_msg_minutes": 10,
+    "reaction_msg_minutes": 5,
+    "session_buffer_minutes": 5,
+    "round_to_minutes": 15,
+    "timezone_offset_hours": -7,
+}
+
+
+def load_config():
+    """Load session parameters from 05 Meta/config.yaml, falling back to defaults."""
+    config = dict(DEFAULTS)
+
+    # Find config.yaml relative to this script
+    script_dir = Path(__file__).resolve().parent
+    config_path = script_dir.parent / "config.yaml"
+
+    if config_path.exists():
+        try:
+            # Use simple YAML parsing to avoid requiring PyYAML
+            import yaml
+            with open(config_path) as f:
+                raw = yaml.safe_load(f)
+            activity = (raw or {}).get("slack", {}).get("activity", {})
+            for key in DEFAULTS:
+                if key in activity:
+                    config[key] = activity[key]
+        except ImportError:
+            # No PyYAML — fall back to regex parsing
+            try:
+                import re
+                text = config_path.read_text()
+                # Find the slack.activity block
+                in_activity = False
+                for line in text.splitlines():
+                    stripped = line.strip()
+                    if stripped == "activity:":
+                        in_activity = True
+                        continue
+                    if in_activity:
+                        if not line.startswith("    ") and not line.startswith("\t\t"):
+                            if stripped and not stripped.startswith("#"):
+                                break
+                        m = re.match(r'\s+(\w+):\s*(-?\d+)', stripped)
+                        if m and m.group(1) in DEFAULTS:
+                            config[m.group(1)] = int(m.group(2))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    return config
+
+
+CONFIG = load_config()
+
+SESSION_GAP_MINUTES = CONFIG["session_gap_minutes"]
+SINGLE_MSG_MINUTES = CONFIG["single_msg_minutes"]
+REACTION_MSG_MINUTES = CONFIG["reaction_msg_minutes"]
+SESSION_BUFFER_MINUTES = CONFIG["session_buffer_minutes"]
+ROUND_TO_MINUTES = CONFIG["round_to_minutes"]
+TIMEZONE_OFFSET_HOURS = CONFIG["timezone_offset_hours"]
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Slack activity report with time estimates. "
+        "Session parameters are read from 05 Meta/config.yaml (slack.activity section) "
+        "and can be overridden via CLI flags."
+    )
+    parser.add_argument("date", nargs="?", default=None, help="Date in YYYY-MM-DD format (default: today)")
+    parser.add_argument("--json", action="store_true", dest="json_output", help="Output as JSON")
+    parser.add_argument("--stdin", action="store_true", help="Read pre-fetched messages from stdin (JSON lines)")
+    parser.add_argument("--session-gap", type=int, default=SESSION_GAP_MINUTES, help=f"Minutes gap to split sessions (default: {SESSION_GAP_MINUTES})")
+    parser.add_argument("--single-msg-time", type=int, default=SINGLE_MSG_MINUTES, help=f"Minutes for single-message sessions (default: {SINGLE_MSG_MINUTES})")
+    return parser.parse_args()
+
+
+def resolve_date(date_str):
+    """Resolve target date. Before 3 AM with no explicit date → yesterday."""
+    if date_str:
+        return date_str
+
+    now = datetime.now()
+    if now.hour < 3:
+        return (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    return now.strftime("%Y-%m-%d")
+
+
+def slack_api_get(endpoint, token, params=None):
+    """Make a GET request to the Slack API."""
+    if params:
+        url = f"https://slack.com/api/{endpoint}?{urllib.parse.urlencode(params)}"
+    else:
+        url = f"https://slack.com/api/{endpoint}"
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    })
+    with urllib.request.urlopen(req) as resp:
+        return json.loads(resp.read())
+
+
+# Cache for user ID → display name lookups
+_user_name_cache = {}
+
+
+def resolve_user_name(user_id, token):
+    """Resolve a Slack user ID to a display name. Cached."""
+    if user_id in _user_name_cache:
+        return _user_name_cache[user_id]
+
+    try:
+        data = slack_api_get("users.info", token, {"user": user_id})
+        if data.get("ok"):
+            user = data["user"]
+            name = (
+                user.get("profile", {}).get("display_name")
+                or user.get("profile", {}).get("real_name")
+                or user.get("real_name")
+                or user_id
+            )
+            _user_name_cache[user_id] = name
+            return name
+    except Exception as e:
+        print(f"Warning: could not resolve user {user_id}: {e}", file=sys.stderr)
+
+    _user_name_cache[user_id] = user_id
+    return user_id
+
+
+def resolve_dm_names(messages, token):
+    """Replace DM:U... channel names with DM:Display Name."""
+    # Collect unique DM user IDs
+    dm_user_ids = set()
+    for m in messages:
+        ch = m["channel"]
+        if ch.startswith("DM:U"):
+            dm_user_ids.add(ch[3:])  # strip "DM:" prefix
+
+    # Resolve all unique user IDs
+    for uid in dm_user_ids:
+        resolve_user_name(uid, token)
+
+    # Replace in messages
+    for m in messages:
+        ch = m["channel"]
+        if ch.startswith("DM:U"):
+            uid = ch[3:]
+            name = _user_name_cache.get(uid, uid)
+            m["channel"] = f"DM:{name}"
+
+    return messages
+
+
+def fetch_via_api(target_date, token):
+    """Fetch messages using Slack search.messages API directly."""
+    messages = []
+    page = 1
+
+    while True:
+        data = slack_api_get("search.messages", token, {
+            "query": f"from:<@{SLACK_USER_ID}> on:{target_date}",
+            "sort": "timestamp",
+            "sort_dir": "asc",
+            "count": 100,
+            "page": page,
+        })
+
+        if not data.get("ok"):
+            print(f"Error: {data.get('error', 'unknown')}", file=sys.stderr)
+            sys.exit(1)
+
+        matches = data.get("messages", {}).get("matches", [])
+        if not matches:
+            break
+
+        for m in matches:
+            channel_name = m.get("channel", {}).get("name", "unknown")
+            channel_id = m.get("channel", {}).get("id", "")
+            # DMs/MPIMs have is_im or is_mpim
+            if m.get("channel", {}).get("is_im") or m.get("channel", {}).get("is_mpim"):
+                channel_name = f"DM:{channel_name}"
+
+            messages.append({
+                "channel": channel_name,
+                "channel_id": channel_id,
+                "ts": float(m.get("ts", 0)),
+                "text": m.get("text", "")[:120],
+                "permalink": m.get("permalink", ""),
+            })
+
+        total = data.get("messages", {}).get("total", 0)
+        if page * 100 >= total:
+            break
+        page += 1
+
+    # Resolve DM user IDs to display names
+    if messages:
+        messages = resolve_dm_names(messages, token)
+
+    return messages
+
+
+def fetch_reactions_via_api(target_date, token):
+    """Fetch items the user reacted to on the target date via reactions.list API."""
+    reactions = []
+    page = 1
+
+    # Convert target_date to timestamp range
+    tz = timezone(timedelta(hours=TIMEZONE_OFFSET_HOURS))
+    day_start = datetime.strptime(target_date, "%Y-%m-%d").replace(tzinfo=tz)
+    day_end = day_start + timedelta(days=1)
+    ts_start = day_start.timestamp()
+    ts_end = day_end.timestamp()
+
+    while True:
+        try:
+            data = slack_api_get("reactions.list", token, {
+                "user": SLACK_USER_ID,
+                "count": 100,
+                "page": page,
+                "full": "true",
+            })
+        except Exception as e:
+            print(f"Warning: reactions.list failed: {e}", file=sys.stderr)
+            break
+
+        if not data.get("ok"):
+            error = data.get("error", "unknown")
+            if error == "missing_scope":
+                print("Note: reactions:read scope not granted, skipping reactions", file=sys.stderr)
+            else:
+                print(f"Warning: reactions.list error: {error}", file=sys.stderr)
+            break
+
+        items = data.get("items", [])
+        if not items:
+            break
+
+        found_older = False
+        for item in items:
+            msg = item.get("message", {})
+            msg_ts = float(msg.get("ts", 0))
+
+            # reactions.list returns newest first; stop when we pass our date range
+            if msg_ts < ts_start:
+                found_older = True
+                break
+
+            if msg_ts > ts_end:
+                continue
+
+            # This is a message in our date range that the user reacted to
+            channel_id = item.get("channel", "")
+            channel_name = item.get("channel_name", channel_id)
+
+            reactions.append({
+                "channel": channel_name,
+                "channel_id": channel_id,
+                "ts": msg_ts,
+                "text": "",  # reaction target, not user's own text
+                "type": "reaction",
+            })
+
+        paging = data.get("paging", {})
+        if found_older or page >= paging.get("pages", 1):
+            break
+        page += 1
+
+    return reactions
+
+
+def read_from_stdin():
+    """Read pre-fetched messages from stdin as JSON lines."""
+    messages = []
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            messages.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return messages
+
+
+def cluster_sessions(timestamps, gap_minutes):
+    """Cluster timestamps into sessions separated by gap_minutes."""
+    if not timestamps:
+        return []
+
+    sorted_ts = sorted(timestamps)
+    sessions = [[sorted_ts[0]]]
+
+    for ts in sorted_ts[1:]:
+        if ts - sessions[-1][-1] > gap_minutes * 60:
+            sessions.append([ts])
+        else:
+            sessions[-1].append(ts)
+
+    return sessions
+
+
+def estimate_channel_time(sessions, single_msg_minutes, buffer_minutes):
+    """Estimate total minutes for a channel from its sessions."""
+    total = 0.0
+    session_details = []
+
+    for session in sessions:
+        if len(session) == 1:
+            duration = single_msg_minutes
+        else:
+            span = (session[-1] - session[0]) / 60.0
+            duration = span + (buffer_minutes * 2)
+
+        total += duration
+        session_details.append({
+            "start": session[0],
+            "end": session[-1],
+            "msg_count": len(session),
+            "raw_minutes": round(duration, 1),
+        })
+
+    return total, session_details
+
+
+def round_up_to(minutes, increment):
+    """Round up to nearest increment."""
+    return math.ceil(minutes / increment) * increment
+
+
+def ts_to_time(ts):
+    """Convert Unix timestamp to HH:MM local time string."""
+    dt = datetime.fromtimestamp(ts, tz=timezone(timedelta(hours=TIMEZONE_OFFSET_HOURS)))
+    return dt.strftime("%H:%M")
+
+
+def build_report(messages, target_date, args):
+    """Build the activity report from messages."""
+    # Group by channel
+    by_channel = defaultdict(list)
+    for m in messages:
+        by_channel[m["channel"]].append(m)
+
+    # Process each channel
+    channels = []
+    for channel_name, msgs in by_channel.items():
+        authored = [m for m in msgs if m.get("type") != "reaction"]
+        reactions = [m for m in msgs if m.get("type") == "reaction"]
+
+        # Session clustering uses all activity timestamps
+        timestamps = [m["ts"] for m in msgs]
+        sessions = cluster_sessions(timestamps, args.session_gap)
+
+        # For channels with only reactions (no authored messages),
+        # use shorter single-message time
+        reaction_only = len(authored) == 0
+        single_time = REACTION_MSG_MINUTES if reaction_only else args.single_msg_time
+
+        raw_minutes, session_details = estimate_channel_time(
+            sessions, single_time, SESSION_BUFFER_MINUTES
+        )
+        rounded = round_up_to(raw_minutes, ROUND_TO_MINUTES)
+
+        # Extract topics from authored message previews
+        previews = [m["text"] for m in sorted(authored, key=lambda x: x["ts"]) if m["text"]]
+
+        channels.append({
+            "channel": channel_name,
+            "channel_id": msgs[0].get("channel_id", ""),
+            "messages": len(authored),
+            "reactions": len(reactions),
+            "reaction_only": reaction_only,
+            "sessions": session_details,
+            "raw_minutes": round(raw_minutes, 1),
+            "rounded_minutes": rounded,
+            "previews": previews,
+        })
+
+    # Sort by time descending
+    channels.sort(key=lambda c: c["rounded_minutes"], reverse=True)
+
+    total_rounded = sum(c["rounded_minutes"] for c in channels)
+    total_authored = sum(c["messages"] for c in channels)
+    total_reactions = sum(c["reactions"] for c in channels)
+
+    return {
+        "date": target_date,
+        "total_messages": total_authored,
+        "total_reactions": total_reactions,
+        "total_channels": len(channels),
+        "total_estimated_minutes": total_rounded,
+        "total_estimated_hours": round(total_rounded / 60, 2),
+        "channels": channels,
+        "flags": ["Total exceeds 10h — likely inflated"] if total_rounded > 600 else [],
+    }
+
+
+def format_report(report, args=None):
+    """Format report as human-readable markdown."""
+    lines = []
+    d = report["date"]
+    lines.append(f"## Slack Activity: {d}")
+    lines.append("")
+    lines.append("### Summary")
+    lines.append(f"- **Channels active**: {report['total_channels']}")
+    lines.append(f"- **Messages sent**: {report['total_messages']}")
+    if report.get("total_reactions", 0) > 0:
+        lines.append(f"- **Reactions placed**: {report['total_reactions']}")
+    lines.append(f"- **Estimated total time**: {format_minutes(report['total_estimated_minutes'])}")
+    if report["flags"]:
+        for flag in report["flags"]:
+            lines.append(f"- **Warning**: {flag}")
+    lines.append("")
+    lines.append("### Activity by Channel")
+    lines.append("")
+
+    for ch in report["channels"]:
+        time_str = format_minutes(ch["rounded_minutes"])
+        lines.append(f"#### #{ch['channel']} — {time_str}")
+
+        # Session detail
+        session_strs = []
+        for s in ch["sessions"]:
+            start = ts_to_time(s["start"])
+            end = ts_to_time(s["end"])
+            if start == end:
+                session_strs.append(f"{start} ({s['msg_count']}msg)")
+            else:
+                session_strs.append(f"{start}-{end} ({s['msg_count']}msg)")
+        lines.append(f"- **Sessions**: {len(ch['sessions'])} — {', '.join(session_strs)}")
+        msg_detail = f"{ch['messages']}msg"
+        if ch.get("reactions", 0) > 0:
+            msg_detail += f" + {ch['reactions']}rx"
+        if ch.get("reaction_only"):
+            msg_detail += " (reactions only)"
+        lines.append(f"- **Activity**: {msg_detail} (raw: {ch['raw_minutes']}min)")
+        lines.append("")
+
+    gap = args.session_gap if args else SESSION_GAP_MINUTES
+    single = args.single_msg_time if args else SINGLE_MSG_MINUTES
+    lines.append("### Notes")
+    lines.append(f"- Session gap threshold: {gap}min")
+    lines.append(f"- Single-message sessions: {single}min")
+    lines.append(f"- All times rounded up to nearest {ROUND_TO_MINUTES}min")
+    lines.append(f"- Config: `05 Meta/config.yaml` → `slack.activity`")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def format_minutes(minutes):
+    """Format minutes as Xh Ym."""
+    h = int(minutes // 60)
+    m = int(minutes % 60)
+    if h == 0:
+        return f"{m}m"
+    if m == 0:
+        return f"{h}h"
+    return f"{h}h {m}m"
+
+
+def main():
+    args = parse_args()
+    target_date = resolve_date(args.date)
+
+    # Determine data source
+    if args.stdin:
+        messages = read_from_stdin()
+    else:
+        token = os.environ.get("SLACK_USER_TOKEN")
+        if not token:
+            print("Error: Set SLACK_USER_TOKEN env var, or use --stdin for MCP passthrough", file=sys.stderr)
+            print("  Create a Slack app at api.slack.com/apps with search:read scope", file=sys.stderr)
+            print("  Then: export SLACK_USER_TOKEN=xoxp-...", file=sys.stderr)
+            sys.exit(1)
+        messages = fetch_via_api(target_date, token)
+
+        # Also fetch reactions (if scope available)
+        reactions = fetch_reactions_via_api(target_date, token)
+        if reactions:
+            # Merge reactions, avoiding duplicates where user both reacted and authored
+            authored_keys = {(m["channel_id"], m["ts"]) for m in messages}
+            for r in reactions:
+                if (r["channel_id"], r["ts"]) not in authored_keys:
+                    messages.append(r)
+
+    if not messages:
+        print(f"No messages found for {target_date}", file=sys.stderr)
+        sys.exit(0)
+
+    report = build_report(messages, target_date, args)
+
+    if args.json_output:
+        print(json.dumps(report, indent=2))
+    else:
+        print(format_report(report, args))
+
+
+if __name__ == "__main__":
+    main()
