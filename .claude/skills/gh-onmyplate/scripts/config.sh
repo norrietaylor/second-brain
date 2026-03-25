@@ -35,3 +35,7 @@ IGNORE_REVIEW_TEAMS=(
 # Set to "false" to disable this filter.
 
 FILTER_MERGED_REVIEWED=true
+
+# ---- Audit log location (for gh_mark_done.sh) --------------------------------
+
+# MARKED_DONE_AUDIT_LOG="$HOME/.local/share/gh-onmyplate/marked-done.tsv"
