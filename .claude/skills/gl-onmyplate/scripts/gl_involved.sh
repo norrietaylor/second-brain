@@ -56,13 +56,14 @@ _resolve_gitlab_host
 
 # ---- Resolve current GitLab user ---------------------------------------------
 
-GL_USER=$(glab api /user 2>/dev/null | jq -r '.username')
+GL_USER_JSON=$(glab api /user 2>/dev/null)
+GL_USER=$(echo "$GL_USER_JSON" | jq -r '.username')
 if [ -z "$GL_USER" ]; then
   echo "ERROR: Could not determine GitLab username. Is 'glab' authenticated?" >&2
   exit 1
 fi
 
-GL_USER_ID=$(glab api /user 2>/dev/null | jq -r '.id')
+GL_USER_ID=$(echo "$GL_USER_JSON" | jq -r '.id')
 
 # ---- Parse arguments ---------------------------------------------------------
 

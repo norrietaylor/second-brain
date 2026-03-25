@@ -1,0 +1,387 @@
+#!/bin/bash
+# ============================================================================
+# sb-today-scan — Gather vault data for /today morning briefing
+# ============================================================================
+#
+# PURPOSE:
+#   Handles the mechanical parts of /today Steps 0-2:
+#   - Creates today's daily note (with inline Bases template) if needed
+#   - Runs sb-ingest for external inbox
+#   - Finds yesterday's daily note + extracts Tomorrow section
+#   - Adds navigation links between daily notes
+#   - Detects gaps (daily notes missing Day Summaries in last 14 days)
+#   - Queries Today.base, Tasks.base, People.base, Digests.base in parallel
+#
+# OUTPUT:
+#   JSON object on stdout with all data Claude needs for the briefing.
+#
+# USAGE:
+#   sb-today-scan
+#
+# DEPENDENCIES:
+#   - obsidian CLI (vault must be open)
+#   - jq
+#   - sb-ingest (in same directory)
+#
+# EXIT CODES:
+#   0 — success (JSON output on stdout)
+#   1 — fatal error
+# ============================================================================
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VAULT_PATH="$(cd "$SCRIPT_DIR/../.." && pwd)"
+DATA_DIR="$VAULT_PATH/04 Data"
+VAULT_NAME="${SECOND_BRAIN_NAME:-second-brain}"
+
+TMPDIR=$(mktemp -d)
+trap "rm -rf $TMPDIR" EXIT
+
+# ---- Date context -----------------------------------------------------------
+
+TODAY=$(date +%Y-%m-%d)
+YEAR=$(date +%Y)
+MONTH=$(date +%m)
+DAY=$(date +%d)
+DOT_DATE="${YEAR}.${MONTH}.${DAY}"
+NOW=$(date +"%Y-%m-%d %H:%M")
+
+# macOS date formatting
+DAY_OF_WEEK=$(date +%A)
+MONTH_NAME=$(date +%B)
+DAY_NUM=$(date +%-d 2>/dev/null || date +%d | sed 's/^0//')
+DISPLAY_DATE="${DAY_OF_WEEK}, ${MONTH_NAME} ${DAY_NUM}, ${YEAR}"
+
+DAILY_NOTE_PATH="04 Data/${YEAR}/${MONTH}/${DOT_DATE}-daily-note.md"
+DAILY_NOTE_FILE="${DATA_DIR}/${YEAR}/${MONTH}/${DOT_DATE}-daily-note.md"
+
+# ---- Helper: date arithmetic (macOS/Linux) ----------------------------------
+
+days_ago() {
+  local n="$1"
+  if date -v-1d +%Y-%m-%d >/dev/null 2>&1; then
+    date -v-${n}d +%Y-%m-%d
+  else
+    date -d "-${n} days" +%Y-%m-%d
+  fi
+}
+
+date_to_dot() {
+  echo "$1" | tr '-' '.'
+}
+
+# ---- Step 0: Create daily note if needed ------------------------------------
+
+DAILY_NOTE_CREATED=false
+if [ ! -f "$DAILY_NOTE_FILE" ]; then
+  DAILY_NOTE_CREATED=true
+  mkdir -p "$(dirname "$DAILY_NOTE_FILE")"
+
+  # Write template using single-quoted heredoc (no expansion, no escaping issues)
+  cat > "$TMPDIR/template.md" << 'TEMPLATE_END'
+---
+type: dailynote
+aliases: [__DATE__-daily-note]
+date: __DATE__
+created: "__NOW__"
+modified: "__NOW__"
+tags: [dailynote]
+---
+
+# __DISPLAY__
+
+---
+## Notes
+-
+
+---
+## Meetings
+```base
+filters:
+  and:
+    - file.inFolder("04 Data")
+    - type == "meeting"
+formulas:
+  File: |
+    if(aliases,link(file, aliases), file)
+views:
+  - type: table
+    name: Meetings
+    filters:
+      and:
+        - this.date == date
+    order:
+      - meeting_name
+      - summary
+      - formula.File
+    sort:
+      - property: created
+        direction: ASC
+```
+
+---
+## Created Today
+```base
+filters:
+  and:
+    - file.inFolder("04 Data")
+formulas:
+  File: |
+    if(aliases,link(file, aliases), file)
+  Test: 'this.created.toString().split("T",1) == created.toString().split("T",1) '
+views:
+  - type: table
+    name: Notes
+    filters:
+      and:
+        - 'this.created.toString().split("T",1) == created.toString().split("T",1) '
+    order:
+      - date
+      - summary
+      - formula.File
+    sort:
+      - property: formula.Test
+        direction: ASC
+      - property: date
+        direction: DESC
+```
+
+## Modified Today
+```base
+filters:
+  and:
+    - file.inFolder("04 Data")
+formulas:
+  File: |
+    if(aliases,link(file, aliases), file)
+  Test: 'this.created.toString().split("T",1) == modified.toString().split("T",1) '
+views:
+  - type: table
+    name: Notes
+    filters:
+      and:
+        - 'this.created.toString().split("T",1) == modified.toString().split("T",1) '
+    order:
+      - date
+      - summary
+      - formula.File
+    sort:
+      - property: formula.Test
+        direction: ASC
+      - property: date
+        direction: DESC
+```
+TEMPLATE_END
+
+  # Substitute placeholders
+  sed "s/__DATE__/$TODAY/g; s/__DOT_DATE__/$DOT_DATE/g; s/__NOW__/$NOW/g; s/__DISPLAY__/$DISPLAY_DATE/g" \
+    "$TMPDIR/template.md" > "$TMPDIR/template_final.md"
+
+  CONTENT=$(cat "$TMPDIR/template_final.md")
+  obsidian "vault=${VAULT_NAME}" create "path=${DAILY_NOTE_PATH}" "content=${CONTENT}" silent 2>/dev/null || {
+    echo "WARN: obsidian create failed, writing directly" >&2
+    cp "$TMPDIR/template_final.md" "$DAILY_NOTE_FILE"
+  }
+fi
+
+# ---- Step 1.5: Ingest -------------------------------------------------------
+
+INGEST_OUTPUT=$("$SCRIPT_DIR/sb-ingest" 2>&1 || true)
+INGEST_COUNT=$(echo "$INGEST_OUTPUT" | grep -c "Imported:" 2>/dev/null || echo "0")
+
+# ---- Step 2a: Find yesterday + extract Tomorrow section ---------------------
+
+YESTERDAY_NOTE=""
+YESTERDAY_DATE=""
+YESTERDAY_TOMORROW=""
+LAST_WORK_DAY=""
+LAST_WORK_DAY_HAS_SUMMARY="false"
+
+for i in $(seq 1 7); do
+  check_date=$(days_ago "$i")
+  check_dot=$(date_to_dot "$check_date")
+  check_year="${check_date:0:4}"
+  check_month="${check_date:5:2}"
+  check_file="${DATA_DIR}/${check_year}/${check_month}/${check_dot}-daily-note.md"
+
+  if [ -f "$check_file" ]; then
+    if [ -z "$YESTERDAY_NOTE" ]; then
+      YESTERDAY_NOTE="04 Data/${check_year}/${check_month}/${check_dot}-daily-note.md"
+      YESTERDAY_DATE="$check_date"
+
+      # Extract ### Tomorrow section (between ### Tomorrow and next ## heading)
+      YESTERDAY_TOMORROW=$(awk '
+        /^### Tomorrow/ { capture=1; next }
+        /^##/ { if (capture) exit }
+        capture { print }
+      ' "$check_file" | sed '/^[[:space:]]*$/d' || true)
+    fi
+
+    if [ -z "$LAST_WORK_DAY" ]; then
+      LAST_WORK_DAY="$check_date"
+      if grep -q "^## Day Summary" "$check_file" 2>/dev/null; then
+        LAST_WORK_DAY_HAS_SUMMARY="true"
+      fi
+    fi
+
+    # Found the most recent daily note — stop scanning for yesterday
+    # (but continue gap detection below)
+    break
+  fi
+done
+
+# ---- Step 2b: Navigation links ----------------------------------------------
+
+NAV_ADDED="false"
+if [ -n "$YESTERDAY_DATE" ] && [ -f "$DAILY_NOTE_FILE" ]; then
+  YESTERDAY_DOT=$(date_to_dot "$YESTERDAY_DATE")
+
+  # Add nav link to today's note (after heading, before ## Notes)
+  if ! grep -q "Yesterday" "$DAILY_NOTE_FILE" 2>/dev/null; then
+    awk -v nav="← [[${YESTERDAY_DOT}-daily-note|Yesterday]] | **Today**" '
+      /^# / && !inserted {
+        print
+        print ""
+        print nav
+        inserted = 1
+        next
+      }
+      { print }
+    ' "$DAILY_NOTE_FILE" > "$TMPDIR/nav_today.md"
+    mv "$TMPDIR/nav_today.md" "$DAILY_NOTE_FILE"
+    NAV_ADDED="true"
+  fi
+
+  # Add forward link to yesterday's note
+  YESTERDAY_FILE="${DATA_DIR}/${YESTERDAY_DATE:0:4}/${YESTERDAY_DATE:5:2}/${YESTERDAY_DOT}-daily-note.md"
+  if [ -f "$YESTERDAY_FILE" ] && ! grep -q "Tomorrow" "$YESTERDAY_FILE" 2>/dev/null; then
+    if grep -q "^←" "$YESTERDAY_FILE" 2>/dev/null; then
+      sed "s|^\(← .*\)|\1 | [[${DOT_DATE}-daily-note|Tomorrow]] →|" \
+        "$YESTERDAY_FILE" > "$TMPDIR/nav_yest.md"
+      mv "$TMPDIR/nav_yest.md" "$YESTERDAY_FILE"
+    fi
+  fi
+fi
+
+# ---- Gap detection (last 14 days) -------------------------------------------
+
+GAP_DATES=()
+for i in $(seq 1 14); do
+  check_date=$(days_ago "$i")
+  check_dot=$(date_to_dot "$check_date")
+  check_year="${check_date:0:4}"
+  check_month="${check_date:5:2}"
+  check_file="${DATA_DIR}/${check_year}/${check_month}/${check_dot}-daily-note.md"
+
+  if [ -f "$check_file" ] && ! grep -q "^## Day Summary" "$check_file" 2>/dev/null; then
+    GAP_DATES+=("$check_date")
+  fi
+done
+
+# Build gaps JSON array
+if [ ${#GAP_DATES[@]} -gt 0 ]; then
+  GAPS_JSON=$(printf '%s\n' "${GAP_DATES[@]}" | jq -R '.' | jq -s '.')
+else
+  GAPS_JSON="[]"
+fi
+
+# ---- Step 2c: Query bases (parallel) ----------------------------------------
+
+# Run all 4 base queries in parallel using temp files
+(obsidian "vault=${VAULT_NAME}" base:query "path=02 Areas/Today.base" format=json 2>/dev/null \
+  > "$TMPDIR/today.json" || echo "[]" > "$TMPDIR/today.json") &
+PID1=$!
+
+(obsidian "vault=${VAULT_NAME}" base:query "path=02 Areas/Tasks.base" format=json 2>/dev/null \
+  > "$TMPDIR/tasks.json" || echo "[]" > "$TMPDIR/tasks.json") &
+PID2=$!
+
+(obsidian "vault=${VAULT_NAME}" base:query "path=02 Areas/People.base" "view=With Follow-ups" format=json 2>/dev/null \
+  > "$TMPDIR/people.json" || echo "[]" > "$TMPDIR/people.json") &
+PID3=$!
+
+(obsidian "vault=${VAULT_NAME}" base:query "path=02 Areas/Digests.base" "view=Recent" format=json 2>/dev/null \
+  > "$TMPDIR/digests.json" || echo "[]" > "$TMPDIR/digests.json") &
+PID4=$!
+
+wait $PID1 $PID2 $PID3 $PID4
+
+# Validate JSON (obsidian CLI may output noise before JSON)
+for f in today tasks people digests; do
+  FILE="$TMPDIR/${f}.json"
+  if ! jq empty "$FILE" 2>/dev/null; then
+    # Try to extract JSON array from noisy output
+    if awk '/^\[/{found=1} found{print}' "$FILE" | jq empty 2>/dev/null; then
+      awk '/^\[/{found=1} found{print}' "$FILE" > "${FILE}.clean"
+      mv "${FILE}.clean" "$FILE"
+    else
+      echo "[]" > "$FILE"
+    fi
+  fi
+done
+
+# ---- Output JSON ------------------------------------------------------------
+
+EOD_FALLBACK="false"
+if [ -n "$LAST_WORK_DAY" ] && [ "$LAST_WORK_DAY_HAS_SUMMARY" = "false" ]; then
+  EOD_FALLBACK="true"
+fi
+
+jq -n \
+  --arg today "$TODAY" \
+  --arg dot_date "$DOT_DATE" \
+  --arg year "$YEAR" \
+  --arg month "$MONTH" \
+  --arg display_date "$DISPLAY_DATE" \
+  --arg now "$NOW" \
+  --arg daily_note_path "$DAILY_NOTE_PATH" \
+  --argjson daily_note_created "$DAILY_NOTE_CREATED" \
+  --arg yesterday_note "${YESTERDAY_NOTE:-}" \
+  --arg yesterday_date "${YESTERDAY_DATE:-}" \
+  --arg yesterday_tomorrow "${YESTERDAY_TOMORROW:-}" \
+  --argjson nav_added "$NAV_ADDED" \
+  --arg last_work_day "${LAST_WORK_DAY:-}" \
+  --argjson last_work_day_has_summary "$LAST_WORK_DAY_HAS_SUMMARY" \
+  --argjson eod_fallback_needed "$EOD_FALLBACK" \
+  --argjson gaps "$GAPS_JSON" \
+  --argjson ingest_count "${INGEST_COUNT:-0}" \
+  --slurpfile today_base "$TMPDIR/today.json" \
+  --slurpfile tasks_base "$TMPDIR/tasks.json" \
+  --slurpfile people_base "$TMPDIR/people.json" \
+  --slurpfile digests_base "$TMPDIR/digests.json" \
+  '{
+    date: {
+      today: $today,
+      dot_date: $dot_date,
+      year: $year,
+      month: $month,
+      display: $display_date,
+      now: $now
+    },
+    daily_note: {
+      path: $daily_note_path,
+      created: $daily_note_created
+    },
+    ingest: {
+      count: $ingest_count
+    },
+    navigation: {
+      yesterday_note: (if $yesterday_note == "" then null else $yesterday_note end),
+      yesterday_date: (if $yesterday_date == "" then null else $yesterday_date end),
+      yesterday_tomorrow: (if $yesterday_tomorrow == "" then null else $yesterday_tomorrow end),
+      links_added: $nav_added
+    },
+    gaps: {
+      last_work_day: (if $last_work_day == "" then null else $last_work_day end),
+      last_work_day_has_summary: $last_work_day_has_summary,
+      eod_fallback_needed: $eod_fallback_needed,
+      missing_summaries: $gaps
+    },
+    bases: {
+      today: $today_base[0],
+      tasks: $tasks_base[0],
+      people: $people_base[0],
+      digests: $digests_base[0]
+    }
+  }'

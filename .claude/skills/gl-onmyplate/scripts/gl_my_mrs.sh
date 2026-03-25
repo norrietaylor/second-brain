@@ -37,30 +37,8 @@ GL_HOST=""
 # shellcheck source=config.sh
 [ -f "$SCRIPT_DIR/config.sh" ] && source "$SCRIPT_DIR/config.sh"
 
-# _resolve_gitlab_host is defined inline here (no _filter_helpers dependency)
-_resolve_gitlab_host() {
-  [ -n "${GL_HOST:-}" ] && { export GITLAB_HOST="$GL_HOST"; return; }
-  [ -n "${GITLAB_HOST:-}" ] && return
-  local config_file="$HOME/Library/Application Support/glab-cli/config.yml"
-  [ -f "$config_file" ] || config_file="$HOME/.config/glab-cli/config.yml"
-  if [ -f "$config_file" ]; then
-    local detected
-    detected=$(python3 -c "
-import re, sys
-with open(sys.argv[1]) as f: content = f.read()
-in_hosts = False; current = None
-for line in content.splitlines():
-    if line == 'hosts:': in_hosts = True; continue
-    if in_hosts:
-        m = re.match(r'^    ([^: ]+):\$', line)
-        if m: current = m.group(1); continue
-        if re.match(r'^        user: \S', line) and current and current != 'gitlab.com':
-            print(current); break
-" "$config_file" 2>/dev/null || echo "")
-    [ -n "$detected" ] && { export GITLAB_HOST="$detected"; return; }
-  fi
-  export GITLAB_HOST; GITLAB_HOST=$(glab config get host 2>/dev/null || echo "gitlab.com")
-}
+# shellcheck source=_filter_helpers.sh
+source "$SCRIPT_DIR/_filter_helpers.sh"
 
 _resolve_gitlab_host
 
