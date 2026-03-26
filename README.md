@@ -1,346 +1,124 @@
----
-modified: 2026-03-23T21:00:00-07:00
----
-# Second Brain
+# Second Brain Installer
 
-An Obsidian vault structured as a personal knowledge management system, powered by Claude Code automation. Notes are organized by type (not folder) using frontmatter-driven Bases views, with CLI commands for daily workflows.
+An installer for provisioning [Obsidian](https://obsidian.md) vaults as personal knowledge management systems, powered by [Claude Code](https://claude.ai/code) automation.
+
+## What It Does
+
+This repo is **not** the vault itself — it's the installer. Running `install.sh` creates a fully configured Second Brain vault at a location of your choosing, with:
+
+- **Type-dispatched notes** — every note has a `type` frontmatter field (person, project, task, meeting, etc.) with enforced schemas
+- **Live database views** — Obsidian Bases files that query notes by frontmatter properties
+- **AI-powered daily workflows** — Claude Code slash commands for morning briefings (`/today`), end-of-day processing (`/eod`), meeting capture (`/meeting`), and more
+- **Configurable integrations** — GitHub, GitLab, Slack, and Granola meeting sync
 
 ## Prerequisites
 
-| Dependency | Purpose | Install |
+| Tool | Required | Install |
 |---|---|---|
-| [Obsidian](https://obsidian.md) | Vault host | `brew install --cask obsidian` |
-| [Obsidian CLI](https://obsidian.md/cli) (v1.12+) | Vault operations from terminal | See Obsidian docs |
-| [Claude Code](https://claude.ai/code) | AI-powered commands (`/today`, `/eod`, etc.) | `npm install -g @anthropic-ai/claude-code` |
+| [Homebrew](https://brew.sh) | Yes | `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"` |
+| [Obsidian](https://obsidian.md) | Yes | `brew install --cask obsidian` |
+| [Obsidian CLI](https://obsidian.md/cli) | Yes (v1.12+) | See Obsidian docs |
+| [Claude Code](https://claude.ai/code) | Yes | `npm install -g @anthropic-ai/claude-code` |
+| [jq](https://jqlang.github.io/jq/) | Yes | `brew install jq` |
+| [Python 3](https://www.python.org) | Yes | Ships with macOS |
+| [gum](https://github.com/charmbracelet/gum) | Auto-installed | `brew install gum` |
+
+The installer will check for these and offer to install missing tools via Homebrew.
+
+### Optional (based on integrations)
+
+| Tool | For | Install |
+|---|---|---|
 | [GitHub CLI](https://cli.github.com) (`gh`) | GitHub sync | `brew install gh` |
-| [GitLab CLI](https://gitlab.com/gitlab-org/cli) (`glab`) | GitLab sync (optional) | `brew install glab` |
-| [jq](https://jqlang.github.io/jq/) | JSON processing in scripts | `brew install jq` |
-| [Python 3](https://www.python.org) | Date calculation, Slack activity script | Ships with macOS |
+| [GitLab CLI](https://gitlab.com/gitlab-org/cli) (`glab`) | GitLab sync | `brew install glab` |
 
-### Obsidian Plugins
-
-Install via Obsidian Settings > Community Plugins:
-
-- **Bases** (core, enable in Core Plugins)
-- **Templater** by SilentVoid
-- **Update frontmatter modified date** by Alan Grainger
-- **Granola Sync** by philfreo — syncs Granola meeting transcripts to a staging folder
-
-### Optional Integrations
-
-| Integration | Purpose | Setup |
-|---|---|---|
-| Slack MCP plugin | Channel summaries in `/eod`, MCP fallback for `/slack:my-activity` | Enable in Claude Code MCP settings |
-| Slack API token | Direct API for `/slack:my-activity` (faster, includes reactions + DM names) | [Setup instructions](#slack-activity--time-estimates) |
-| [Granola](https://granola.ai) | Meeting transcription and notes | [Setup instructions](#granola-meeting-sync) |
-| Harvest MCP server | Time entry (future `/slack:harvest-entry`) | Configured in Claude Desktop |
-
-## Setup
-
-### 1. Clone and open the vault
+## Install
 
 ```bash
-git clone <repo-url> ~/Documents/obsidian/second-brain
+git clone https://github.com/norrietaylor/second-brain.git
+cd second-brain
+./install.sh
 ```
 
-Open the folder as a vault in Obsidian.
+The interactive installer will prompt for:
 
-### 2. Run the setup command
+1. **Vault name** — used in Obsidian and CLI commands (default: `second-brain`)
+2. **Vault location** — where to create the vault (default: `~/Documents/obsidian/<name>`)
+3. **Integrations** — which features to enable:
+   - GitHub sync (issue/PR tracking, notifications)
+   - GitLab sync (MR/issue tracking, todos)
+   - Slack activity tracking (time estimates for Harvest)
+   - Granola meeting sync (transcription)
+   - Git-backed vault (version control with update support)
+4. **Your profile** — name, role, email (used in meeting notes and config)
 
-With the vault open in Obsidian, start Claude Code in the vault directory and run:
+## Update
 
-```
-/setup
-```
-
-This interactive command will:
-- Create all gitignored directories (`04 Data/`, `05 Meta/context/`, `05 Meta/logs/`, `03 Resources/`, `~/second-brain-inbox/`)
-- Scaffold personal context files (work profile, priorities) with your input
-- Validate all prerequisites (Obsidian CLI, GitHub CLI, jq, Python 3)
-- Check GitHub authentication
-- Verify Obsidian vault access and script permissions
-- Remind you to configure required Obsidian plugins
-- Create `.claude/settings.local.json` if missing
-
-### 3. Manual steps after `/setup`
-
-The command will flag anything it can't automate. Common manual steps:
-
-- **Obsidian plugins** — install via Settings > Community Plugins:
-  - **Templater**: set template folder to `05 Meta/templates`
-  - **Update frontmatter modified date**: set format to `YYYY-MM-DD HH:mm`, add `05 Meta` to excluded folders
-  - **Granola Sync**: see [Granola Meeting Sync](#granola-meeting-sync)
-- **GitHub auth** — if not authenticated, run `gh auth login`
-- **Slack** — see [Slack Activity & Time Estimates](#slack-activity--time-estimates) for optional setup
-
-## Preflight Check
-
-Run these to verify everything is wired up:
+If you installed with "Git-backed vault" enabled:
 
 ```bash
-# Core tools
-obsidian --version                    # v1.12+ required
-gh --version                          # GitHub CLI
-jq --version                          # JSON processor
-python3 --version                     # Python 3
-
-# Obsidian vault access
-obsidian vault=second-brain search query="type" path="05 Meta/claude" format=json | cat
-
-# Bases views respond
-obsidian vault=second-brain base:query path="02 Areas/Tasks.base" format=json | cat
-
-# GitHub CLI authenticated
-gh auth status
-
-# Scripts are executable
-ls -la 05\ Meta/scripts/gh-fetch 05\ Meta/scripts/sb-ingest 05\ Meta/scripts/slack-my-activity
-
-# Inbox drop folder exists
-ls -d ~/second-brain-inbox
-
-# Claude Code session hook works
-python3 '05 Meta/scripts/calculate_dates.py'
-
-# Slack API (optional — only if token configured)
-echo $SLACK_USER_TOKEN | head -c 10   # should show "xoxp-..."
+cd /path/to/this/installer-repo
+git pull
+./install.sh --update
 ```
 
-All commands should exit 0. If Obsidian CLI commands fail, make sure Obsidian is running with the vault open.
+The updater:
+1. Finds your vault (or prompts for the path)
+2. Updates the `sb/upstream` tracking branch with new template files
+3. Merges into your `main` branch
+4. You resolve any conflicts in files you've customized
 
-## Architecture
+For non-git vaults, `--update` overwrites installer-managed files directly.
 
-See [CLAUDE.md](CLAUDE.md) for full system documentation: type dispatch, file naming, wiki-link conventions, classification pipeline, GitHub sync, and Slack activity architecture.
+## What Gets Installed
 
-### Key Concepts
+### Installer-managed files (updated on `--update`)
 
-- **Type dispatch**: every note has a `type` frontmatter field; schemas live in `05 Meta/claude/<type>.claude.md`
-- **Single data lake**: all notes in `04 Data/YYYY/MM/` regardless of type
-- **Virtual folders**: `02 Areas/*.base` files are live database views, not storage
-- **Classification pipeline**: new captures arrive as `type: inbox` → `/eod` classifies them → low confidence items get flagged for review
+- `.claude/commands/` — slash commands (`/today`, `/eod`, `/meeting`, etc.)
+- `.claude/skills/` — Claude Code skills (classify, obsidian-cli, gh-onmyplate, etc.)
+- `.claude/agents/` — automation agents
+- `.claude/settings.json` — permissions and hooks
+- `05 Meta/claude/` — type schemas (`*.claude.md`)
+- `05 Meta/scripts/` — shell scripts (gh-fetch, sb-ingest, granola-ingest, etc.)
+- `05 Meta/templates/` — Templater templates
+- `05 Meta/bases/` — system base views
+- `02 Areas/*.base` — browsing views
+- `01 Projects/*.base` — project tracking
+- `CLAUDE.md` — vault documentation for Claude Code
 
-### Commands
+### User-owned files (created once, never overwritten)
 
-| Command | When to use |
-|---|---|
-| `/setup` | First-time vault initialization after cloning |
-| `/today` | Start of day — briefing, daily note, GitHub sync |
-| `/eod` | End of day — classify inbox, detect dirty notes, Slack activity + time estimates, generate digest |
-| `/meeting` | Create a meeting note from natural language |
-| `/learned` | Capture context at end of a work session |
-| `/gh-import` | Import or update a specific GitHub issue/PR |
-| `/generate-digests` | Backfill missing weekly/monthly digests |
-| `/slack:my-activity` | Slack activity report with time estimates per channel (for Harvest) |
-| `/gh-onmyplate` | GitHub plate check — notifications, open threads, your PRs |
-| `/gl-onmyplate` | GitLab plate check — todos, open threads, your MRs |
-| `/session-log` | Capture session context for Second Brain ingestion |
+- `05 Meta/config.yaml` — classification, Slack, and Granola settings
+- `05 Meta/context/` — work profile, priorities
+- `05 Meta/logs/` — classification audit trail
+- `04 Data/` — all your notes
+- `.claude/settings.local.json` — your local Claude Code settings
 
-### Scripts
+## Vault Architecture
 
-| Script | Purpose | Usage |
-|---|---|---|
-| `05 Meta/scripts/gh-fetch` | Fetch GitHub issue/PR data as JSON | `gh-fetch <url> [--since <ISO-date>]` |
-| `05 Meta/scripts/sb-ingest` | Import files from `~/second-brain-inbox/` drop folder | `sb-ingest [--dry-run]` |
-| `05 Meta/scripts/calculate_dates.py` | Date utility (runs on session start via hook) | Auto-invoked |
-| `05 Meta/scripts/granola-ingest` | Transform staged Granola notes into meeting notes | `granola-ingest [--dry-run]` |
-| `05 Meta/scripts/slack-my-activity` | Slack activity with session-based time estimates | `slack-my-activity [YYYY-MM-DD] [--json]` |
-| `05 Meta/scripts/sync-memory.sh` | Sync Claude memory files | Manual |
+See the installed vault's `CLAUDE.md` for full documentation on:
+- Type dispatch system and note schemas
+- File naming conventions
+- Obsidian CLI usage
+- Classification pipeline
+- GitHub/GitLab sync architecture
+- Granola meeting sync
+- Slack activity tracking
 
-### Configuration
+## Development
 
-Central configuration lives in `05 Meta/config.yaml`:
+This repo uses the following structure:
 
-```yaml
-classification:
-  confidence_threshold: 0.6        # below this → needs_review
-
-slack:
-  denylist:                        # channels excluded from /eod summaries
-    - random
-    - social
-    - watercooler
-  activity:                        # session clustering for time estimates
-    session_gap_minutes: 15        # gap to split sessions
-    single_msg_minutes: 10         # lone authored message duration
-    reaction_msg_minutes: 5        # lone reaction-only duration
-    session_buffer_minutes: 5      # buffer on each end of multi-message sessions
-    round_to_minutes: 15           # Harvest-friendly rounding
-    timezone_offset_hours: -7      # PDT (-7) or PST (-8)
-
-granola:
-  self_name: "Your Name"           # excluded from attendee counts
-  self_aliases: ["Your First Name"]
-  staging_folder: "Granola"        # must match plugin folder path
-  series_overrides: {}             # "Meeting Title": "forced-meeting-name"
+```
+├── install.sh          ← main installer + updater
+├── lib/                ← installer helper scripts
+├── template/           ← vault source files (copied to target)
+├── scaffold/           ← user-owned files (created once)
+└── docs/               ← development specs and proofs
 ```
 
-## Slack Activity & Time Estimates
-
-Tracks your personal Slack activity (messages sent, reactions placed) for a given day, groups by channel, clusters into sessions, and estimates time spent. Designed for Harvest time entry.
-
-Full technical documentation: `05 Meta/claude/slack-activity.claude.md`
-
-### How it works
-
-1. Fetches all messages you sent on the target date
-2. Optionally fetches messages you reacted to (Direct API only)
-3. Groups by channel, clusters messages into sessions (15-min gap = new session)
-4. Estimates duration per session: single message = 10min, multi-message = span + 10min buffer
-5. Rounds per-channel totals to 15 minutes (Harvest-friendly)
-
-### Usage
-
+To work on the installer:
 ```bash
-# Standalone
-/slack:my-activity              # today
-/slack:my-activity 2026-03-23   # specific date
-
-# Automatic — runs as part of /eod Step 5.5
-# Output appears in daily note as a collapsible time estimate table
+cd /path/to/second-brain   # this repo
+claude                      # uses root CLAUDE.md for context
 ```
-
-### Data sources (graceful degradation)
-
-| Source | Requires | Messages | Reactions | DM Names | Speed |
-|---|---|---|---|---|---|
-| Direct API | `SLACK_USER_TOKEN` env var | 100/page | Yes | Yes | 1-2 API calls |
-| MCP fallback | Slack MCP plugin enabled | 20/page | No | Yes | 3+ MCP calls |
-| Neither | — | Skipped | Skipped | — | — |
-
-### Setup (optional — MCP fallback works without this)
-
-Create a Slack app for Direct API mode:
-
-1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From Scratch**
-2. **OAuth & Permissions** → **User Token Scopes** → add: `search:read`, `reactions:read`, `users:read`
-3. **Install to Workspace** → approve → copy **User OAuth Token** (`xoxp-...`)
-4. Add to shell profile:
-   ```bash
-   # ~/.zshrc
-   export SLACK_USER_TOKEN="xoxp-your-token-here"
-   ```
-
-### EOD integration
-
-`/eod` Step 5.5 automatically generates channel summaries and time estimates. The time report appears in the daily note as a collapsed callout:
-
-```markdown
-### Slack Activity
-- **#channel-1** — topic summary
-- **#channel-2** — topic summary
-
-> [!note]- Time Estimates (13 channels, 6h 30m)
-> | Channel | Sessions | Time |
-> |---------|----------|------|
-> | #DM:Rebeccah | 6 — 14:03, 14:18-14:20, ... | 1h 15m |
-> | #acct-clc | 3 — 13:29-13:30, 15:46-15:50 | 45m |
-> | **Total** | | **6h 30m** |
-```
-
-### Limitations
-
-- **Huddles**: Not accessible via Slack API. No endpoint exposes huddle participation or duration.
-- **Passive reading**: Only channels where you posted or reacted are tracked.
-- **MCP mode**: No reactions data, slower pagination, but works without any setup.
-
-## Granola Meeting Sync
-
-Granola (granola.ai) meetings are synced into the vault via a two-stage pipeline: an Obsidian plugin handles API polling, and a bash script transforms the output into proper second-brain notes.
-
-### Setup (one-time)
-
-1. **Install the plugin** — [philfreo/obsidian-granola-plugin](https://github.com/philfreo/obsidian-granola-plugin) (manual install or community catalog). Desktop only.
-2. **Authenticate** — Open Obsidian Settings → Granola Sync → click "Connect to Granola". Complete the OAuth flow in the browser.
-3. **Configure the plugin settings:**
-   - **Template path**: `05 Meta/templates/Granola.md`
-   - **Folder path**: `Granola` (staging folder — the ingest script moves notes out of here)
-   - **Filename pattern**: `{date} {title}`
-   - **Sync frequency**: `15m` (or preference — `1m` to `12h`, or `manual`)
-   - **Sync time range**: `last_30_days`
-   - **Match attendees by email**: `enabled`
-   - **Include full transcript**: `enabled` (optional)
-   - **Skip existing notes**: `enabled`
-4. **Configure your name** in `05 Meta/config.yaml` (see [Configuration](#configuration))
-5. **Add emails to person notes** for attendee auto-linking:
-   ```yaml
-   emails:
-     - alice@company.com
-   ```
-
-### How it works
-
-```
-Granola app → plugin polls API → Granola/ staging folder
-                                      ↓
-                          /eod Step 0.75 (or manual: granola-ingest)
-                                      ↓
-                          For each staged note:
-                            1. Parse frontmatter (granola_id, title, date, attendees)
-                            2. Derive meeting_name (strip dates, kebab-case)
-                            3. Detect 1-on-1 (1 attendee excluding self)
-                            4. Dedup by granola_id
-                            5. Create meeting note in 04 Data/YYYY/MM/
-                            6. Create person stubs for unknown attendees
-                            7. Rewrite attendees with [[wiki-links]]
-                            8. Delete staging file
-```
-
-### Meeting note layout
-
-- `source: granola` and `granola_id` in frontmatter (for dedup)
-- `## Log` — your private notes from Granola
-- `> [!note]- Granola AI Summary` — collapsed AI-generated content
-- `> [!note]- Transcript` — collapsed full transcript (if enabled)
-- `/eod` Step 3 generates `## Summary` from the Log content
-
-## Skills: Platform Plate Checks
-
-`gh-onmyplate` and `gl-onmyplate` are Claude Code skills that surface what needs your attention on GitHub and GitLab respectively. Each bundles a set of shell scripts that query the platform APIs from different angles, then synthesize a briefing grouped by action needed.
-
-### `gl-onmyplate` — GitLab
-
-Five scripts for self-hosted or gitlab.com instances. Auto-detects the GitLab host from `glab` CLI config.
-
-| Script | Purpose |
-|---|---|
-| `gl_notifications.sh` | Pending todos (GitLab inbox) — @mentions, assignments, review/approval requests |
-| `gl_involved.sh` | All open MRs and issues where you're author, assignee, or reviewer |
-| `gl_my_mrs.sh` | Your open MRs with pipeline status and last note |
-| `gl_thread_context.sh` | Relevant tail of a specific MR or issue thread with action hint |
-| `gl_mark_done.sh` | Mark a todo as done with audit log |
-
-**Configuration** — edit `.claude/skills/gl-onmyplate/scripts/config.sh`:
-- `GL_HOST` — self-hosted hostname (blank = auto-detect from glab config)
-- `IGNORE_REVIEW_GROUPS` — namespace paths to filter out team-only review requests
-- `FILTER_MERGED_REVIEWED` — filter merged MRs from todos (default: `true`)
-
-**Prerequisites:** `glab` CLI authenticated, `jq`, `curl`.
-
-### `gh-onmyplate` — GitHub
-
-Four scripts plus a mark-done action for GitHub notifications and threads.
-
-| Script | Purpose |
-|---|---|
-| `gh_notifications.sh` | New activity from GitHub notification inbox (unread/read) |
-| `gh_involved.sh` | All open issues and PRs you're involved in |
-| `gh_my_prs.sh` | Your open PRs with last post summary |
-| `gh_thread_context.sh` | Relevant tail of a specific issue/PR thread with action hint |
-| `gh_mark_done.sh` | Mark a notification thread as done with audit log |
-
-**Configuration** — edit `.claude/skills/gh-onmyplate/scripts/config.sh`:
-- `IGNORE_REVIEW_TEAMS` — `org/team-slug` entries to filter team-only review requests
-- `FILTER_MERGED_REVIEWED` — filter merged PRs from notifications (default: `true`)
-
-**Prerequisites:** `gh` CLI authenticated with `repo` and `notifications` scopes, `jq`.
-
-### Timespan parameter
-
-All discovery scripts accept an optional timespan: `3d`, `7d` (default), `2w`, `1m`, `1y`. For `*_my_prs.sh`/`*_my_mrs.sh`, the default is `1y`.
-
-### Workflow
-
-Both skills follow the same pattern:
-1. **Discover** — run the three discovery scripts to find threads from different angles
-2. **Dig in** — use `*_thread_context.sh` on threads that need more context
-3. **Synthesize** — present a briefing grouped into "needs your response", "your open PRs/MRs — status", and "no action needed (FYI)"

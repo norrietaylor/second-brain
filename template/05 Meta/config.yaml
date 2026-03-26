@@ -1,0 +1,23 @@
+classification:
+  confidence_threshold: 0.6
+
+slack:
+  denylist:
+    - random
+    - social
+    - watercooler
+  activity:
+    session_gap_minutes: 15       # gap between messages to start a new session
+    single_msg_minutes: 10        # time for a single authored message session
+    reaction_msg_minutes: 5       # time for a reaction-only session
+    session_buffer_minutes: 5     # buffer added to each end of a multi-message session
+    round_to_minutes: 15          # round channel totals up to this increment
+    timezone_offset_hours: -7     # PDT; change to -8 for PST
+  # future: harvest_api_key, harvest_project_map, etc.
+
+granola:
+  self_name: "{{USER_NAME}}"
+  self_aliases:
+    - "{{USER_FIRST_NAME}}"
+  staging_folder: "Granola"
+  series_overrides: {}

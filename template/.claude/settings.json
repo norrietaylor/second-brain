@@ -1,0 +1,67 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(obsidian *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(python3 *05 Meta/scripts/*)",
+      "Bash(*05 Meta/scripts/sb*)",
+      "Bash(*05 Meta/scripts/vault-cleanup*)",
+      "Bash(*05 Meta/scripts/gh-fetch*)",
+      "Bash(*05 Meta/scripts/sync-memory.sh*)",
+      "Bash(*gh-onmyplate/scripts/*)",
+      "Bash(*gl-onmyplate/scripts/*)",
+      "Bash(*05 Meta/scripts/granola-ingest*)",
+      "Bash(*05 Meta/scripts/granola-initial-sync*)",
+      "Bash(*05 Meta/scripts/slack-my-activity*)"
+    ],
+    "deny": [
+      "Bash(git push*)",
+      "Bash(git reset*)",
+      "Bash(rm -rf*)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "mode": "auto-allow",
+    "filesystem": {
+      "allowWrite": [
+        ".",
+        "~/{{VAULT_NAME}}-inbox"
+      ],
+      "allowRead": [
+        ".",
+        "~/{{VAULT_NAME}}-inbox",
+        "~/.config/gh",
+        "~/.config/glab"
+      ],
+      "denyWrite": [
+        "~/"
+      ]
+    },
+    "network": {
+      "allowedDomains": [
+        "api.github.com",
+        "github.com",
+        "*.gitlab.com",
+        "slack.com",
+        "*.slack.com"
+      ]
+    }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 '05 Meta/scripts/calculate_dates.py'"
+          }
+        ]
+      }
+    ]
+  }
+}
