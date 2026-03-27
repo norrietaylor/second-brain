@@ -18,7 +18,7 @@
 
 set -euo pipefail
 
-VAULT="${SECOND_BRAIN_VAULT:-$HOME/Documents/obsidian/second-brain}"
+VAULT="${SECOND_BRAIN_VAULT:-{{VAULT_PATH}}}"
 CONFIG_FILE="$VAULT/05 Meta/config.yaml"
 
 # Read staging folder from config

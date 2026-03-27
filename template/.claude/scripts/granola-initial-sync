@@ -30,7 +30,7 @@ from pathlib import Path
 
 # ---- Configuration ----------------------------------------------------------
 
-VAULT = os.environ.get("SECOND_BRAIN_VAULT", os.path.expanduser("~/Sites/second-brain/second-brain"))
+VAULT = os.environ.get("SECOND_BRAIN_VAULT", "{{VAULT_PATH}}")
 MCP_URL = "https://mcp.granola.ai/mcp"
 DEFAULT_DELAY = 3  # seconds between transcript API calls
 MAX_MEETINGS_PER_BATCH = 10

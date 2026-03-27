@@ -104,6 +104,7 @@ if [[ "$UPDATE_MODE" == true ]]; then
 
   # Set template variables
   export TPL_VAULT_NAME="$vault_name"
+  export TPL_VAULT_PATH="$UPDATE_PATH"
   # Read user name from existing config
   if [[ -f "${UPDATE_PATH}/05 Meta/config.yaml" ]]; then
     existing_name=$(grep 'self_name:' "${UPDATE_PATH}/05 Meta/config.yaml" 2>/dev/null | sed 's/.*self_name: *"\(.*\)"/\1/' || echo "")
@@ -166,7 +167,7 @@ if [[ "$UPDATE_MODE" == true ]]; then
   log_success "Updated .sb-installer.json to v${INSTALLER_VERSION}"
 
   # Make scripts executable
-  find "${UPDATE_PATH}/05 Meta/scripts" -type f -exec chmod +x {} \; 2>/dev/null || true
+  find "${UPDATE_PATH}/.claude/scripts" -type f -exec chmod +x {} \; 2>/dev/null || true
   find "${UPDATE_PATH}/.claude/skills" -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
 
   show_banner "Update complete!" "v${old_version} → v${INSTALLER_VERSION}"
@@ -253,6 +254,7 @@ user_first_name="${user_name%% *}"
 
 # Set template variables
 export TPL_VAULT_NAME="$vault_name"
+export TPL_VAULT_PATH="$vault_path"
 export TPL_USER_NAME="$user_name"
 export TPL_USER_FIRST_NAME="$user_first_name"
 export TPL_USER_ROLE="$user_role"
@@ -276,7 +278,7 @@ log_success "Created vault directories"
 copy_template_tree "${INSTALLER_DIR}/template" "$vault_path" "$integrations"
 
 # Make scripts executable
-find "${vault_path}/05 Meta/scripts" -type f -exec chmod +x {} \; 2>/dev/null || true
+find "${vault_path}/.claude/scripts" -type f -exec chmod +x {} \; 2>/dev/null || true
 find "${vault_path}/.claude/skills" -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
 # Make skill entry-point scripts executable
 find "${vault_path}/.claude/skills" -maxdepth 2 -type f ! -name "*.md" -exec chmod +x {} \; 2>/dev/null || true
@@ -296,6 +298,7 @@ scaffold_apply() {
   local dst="$2"
   sed \
     -e "s|{{VAULT_NAME}}|${TPL_VAULT_NAME}|g" \
+    -e "s|{{VAULT_PATH}}|${TPL_VAULT_PATH}|g" \
     -e "s|{{USER_NAME}}|${TPL_USER_NAME}|g" \
     -e "s|{{USER_FIRST_NAME}}|${TPL_USER_FIRST_NAME}|g" \
     -e "s|{{USER_ROLE}}|${TPL_USER_ROLE}|g" \

@@ -39,7 +39,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VAULT_PATH="$(cd "$SCRIPT_DIR/../.." && pwd)"
-VAULT_NAME="${SECOND_BRAIN_NAME:-second-brain}"
+VAULT_NAME="${SECOND_BRAIN_NAME:-{{VAULT_NAME}}}"
 INBOX_LOG_FULL="${VAULT_PATH}/05 Meta/logs/inbox-log.md"
 
 WORK=$(mktemp -d)

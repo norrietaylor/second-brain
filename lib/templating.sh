@@ -10,6 +10,7 @@ source "${SCRIPT_DIR}/common.sh"
 # These are set by the installer before calling copy functions.
 # Exported so they're available to subshells.
 export TPL_VAULT_NAME="${TPL_VAULT_NAME:-second-brain}"
+export TPL_VAULT_PATH="${TPL_VAULT_PATH:-}"
 export TPL_USER_NAME="${TPL_USER_NAME:-}"
 export TPL_USER_FIRST_NAME="${TPL_USER_FIRST_NAME:-}"
 export TPL_USER_ROLE="${TPL_USER_ROLE:-}"
@@ -21,6 +22,7 @@ export TPL_USER_EMAIL="${TPL_USER_EMAIL:-}"
 apply_template() {
   local content="$1"
   content="${content//\{\{VAULT_NAME\}\}/${TPL_VAULT_NAME}}"
+  content="${content//\{\{VAULT_PATH\}\}/${TPL_VAULT_PATH}}"
   content="${content//\{\{USER_NAME\}\}/${TPL_USER_NAME}}"
   content="${content//\{\{USER_FIRST_NAME\}\}/${TPL_USER_FIRST_NAME}}"
   content="${content//\{\{USER_ROLE\}\}/${TPL_USER_ROLE}}"
@@ -35,6 +37,7 @@ apply_template_file() {
 
   sed \
     -e "s|{{VAULT_NAME}}|${TPL_VAULT_NAME}|g" \
+    -e "s|{{VAULT_PATH}}|${TPL_VAULT_PATH}|g" \
     -e "s|{{USER_NAME}}|${TPL_USER_NAME}|g" \
     -e "s|{{USER_FIRST_NAME}}|${TPL_USER_FIRST_NAME}|g" \
     -e "s|{{USER_ROLE}}|${TPL_USER_ROLE}|g" \

@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-VAULT="${SECOND_BRAIN_VAULT:-$HOME/Documents/obsidian/second-brain}"
+VAULT="${SECOND_BRAIN_VAULT:-{{VAULT_PATH}}}"
 CONTEXT_DIR="$VAULT/05 Meta/context"
 OUTPUT_DIR="$HOME/.claude/memory"
 OUTPUT_FILE="$OUTPUT_DIR/work-context.md"

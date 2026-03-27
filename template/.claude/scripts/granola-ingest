@@ -15,15 +15,15 @@
 #   granola.series_overrides — map of title → meeting_name for edge cases
 #
 # Environment overrides:
-#   SECOND_BRAIN_VAULT  — vault path (default: ~/Documents/obsidian/second-brain)
-#   SECOND_BRAIN_NAME   — vault name for Obsidian CLI (default: second-brain)
+#   SECOND_BRAIN_VAULT  — vault path (default: {{VAULT_PATH}})
+#   SECOND_BRAIN_NAME   — vault name for Obsidian CLI (default: {{VAULT_NAME}})
 
 set -euo pipefail
 
 # ---- Configuration -----------------------------------------------------------
 
-VAULT="${SECOND_BRAIN_VAULT:-$HOME/Sites/second-brain/second-brain}"
-VAULT_NAME="${SECOND_BRAIN_NAME:-second-brain}"
+VAULT="${SECOND_BRAIN_VAULT:-{{VAULT_PATH}}}"
+VAULT_NAME="${SECOND_BRAIN_NAME:-{{VAULT_NAME}}}"
 CONFIG_FILE="$VAULT/05 Meta/config.yaml"
 
 DRY_RUN=false

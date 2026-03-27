@@ -9,14 +9,14 @@
 # (04 Data/YYYY/MM/) as unprocessed inbox items for /eod to classify.
 #
 # Configuration:
-#   SECOND_BRAIN_VAULT  — vault path (default: ~/Documents/git/me/second-brain)
-#   SECOND_BRAIN_NAME   — vault name for Obsidian CLI (default: second-brain)
+#   SECOND_BRAIN_VAULT  — vault path (default: {{VAULT_PATH}})
+#   SECOND_BRAIN_NAME   — vault name for Obsidian CLI (default: {{VAULT_NAME}})
 #   SECOND_BRAIN_INBOX  — drop folder (default: ~/{{VAULT_NAME}}-inbox)
 
 set -euo pipefail
 
-VAULT="${SECOND_BRAIN_VAULT:-$HOME/Sites/second-brain/second-brain}"
-VAULT_NAME="${SECOND_BRAIN_NAME:-second-brain}"
+VAULT="${SECOND_BRAIN_VAULT:-{{VAULT_PATH}}}"
+VAULT_NAME="${SECOND_BRAIN_NAME:-{{VAULT_NAME}}}"
 INBOX="${SECOND_BRAIN_INBOX:-$HOME/{{VAULT_NAME}}-inbox}"
 
 DRY_RUN=false

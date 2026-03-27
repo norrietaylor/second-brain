@@ -33,7 +33,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VAULT_PATH="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DATA_DIR="$VAULT_PATH/04 Data"
-VAULT_NAME="${SECOND_BRAIN_NAME:-second-brain}"
+VAULT_NAME="${SECOND_BRAIN_NAME:-{{VAULT_NAME}}}"
 
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
