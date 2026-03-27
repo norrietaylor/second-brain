@@ -41,7 +41,7 @@ Read `05 Meta/claude/vault-operations.md` for vault structure, conventions, and 
 Run the vault scan script. This handles daily note creation, ingest, navigation links, gap detection, and all base queries in a single invocation:
 
 ```bash
-"05 Meta/scripts/sb-today-scan"
+".claude/scripts/sb-today-scan"
 ```
 
 **Output:** JSON object with keys:
@@ -72,24 +72,6 @@ git commit -m "sb: /today fallback — generated missing daily notes/digests for
 - If today is the 1st: check for monthly digest. If missing, generate.
 - If today is Jan 1: check for yearly digest. If missing, generate.
 
-### Step 2.5: GitHub Sync (scripted)
-
-Run the GitHub sync script. This handles discovery, categorization, mark-done, and vault state lookup:
-
-```bash
-"05 Meta/scripts/sb-github-sync"
-```
-
-**Output:** JSON object with keys:
-- `discovery.notifications[]` — thread_id, repo, type, reason, status, updated, title, url, source
-- `discovery.involved_raw` — raw text from gh_involved.sh
-- `discovery.my_prs_raw` — raw text from gh_my_prs.sh
-- `discovery.counts` — notifications, involved, my_prs
-- `vault_state.github_notes[]` — existing GitHub vault notes from GitHub.base
-- `vault_state.task_notes[]` — existing task notes
-- `mark_done` — count, errors
-- `stale_tasks[]` — path, github_url, key, github_state, should_resolve
-
 ### Step 1.75: Sync Raindrop Bookmarks
 
 Trigger a make-it-rain sync to catch any bookmarks saved since the last sync:
@@ -108,95 +90,56 @@ obsidian vault={{VAULT_NAME}} base:query path="05 Meta/bases/Raindrop Inbox.base
 
 Record the count as `raindrop_inbox_count` for the Step 4 briefing. If 0, skip the Raindrop section in the briefing.
 
-**Processing the output:**
+### Step 2.5: GitHub Sync (fully scripted)
 
-1. **Deduplicate** threads across notifications, involved, and my_prs by `owner/repo#number`.
+Run both scripts in sequence — the first handles discovery and mark-done, the second handles all vault mutations:
 
-2. **Categorize** each thread:
-   - **Needs Response** — notification reason: mention, comment, assign, or state_change
-   - **My PRs** — from my_prs output
-   - **Review Requests** — notification reason: review_requested
-   - **FYI** — everything else (subscribed, ci_activity, or user's last post is latest)
+```bash
+GITHUB_RESULT=$(".claude/scripts/sb-github-sync" | ".claude/scripts/sb-github-process")
+```
 
-3. **For each thread**, check `vault_state.github_notes` for an existing vault note (match by `github_repo` + `github_number`).
+`sb-github-process` handles everything internally:
+- Deduplicates and categorizes threads across all discovery sources
+- Runs `gh-fetch` in parallel for actionable threads
+- Creates or updates vault notes (`type: github`)
+- Creates task notes for Needs Response and Review Requests
+- Auto-resolves stale task notes
+- Commits all vault changes
 
-4. **Fetch and update vault notes** — for each unique thread:
-   - **If vault note exists** with `github_last_synced` older than the thread's `updated` timestamp:
-     ```bash
-     "05 Meta/scripts/gh-fetch" "GITHUB_URL" --since "GITHUB_LAST_SYNCED"
-     ```
-     If new activity: summarize it, update frontmatter via `obsidian property:set`, append summary via `obsidian append`. Follow `/gh-import` Step 4 logic.
-   - **If vault note does not exist** and thread is in Needs Response, My PRs, or Review Requests:
-     ```bash
-     "05 Meta/scripts/gh-fetch" "GITHUB_URL"
-     ```
-     Create vault note following `/gh-import` Step 3 logic.
-   - **FYI threads without vault notes**: skip gh-fetch (no vault note needed).
+**Output** (`GITHUB_RESULT` JSON):
+```json
+{
+  "needs_response": [{"key":"owner/repo#N","url":"...","title":"...","vault_note":"YYYY.MM.DD-gh-repo-N","vault_alias":"gh-repo-N","task_note":"...","task_alias":"..."}],
+  "review_requests": [...],
+  "my_prs": [{"key":"...","url":"...","title":"...","vault_note":"...","last_post_summary":"..."}],
+  "fyi": [...],
+  "resolved": [{"key":"owner/repo#N","github_state":"closed"}],
+  "stats": {"created":N,"updated":N,"tasks_created":N,"auto_resolved":N,"commit_message":"..."}
+}
+```
 
-5. **Create task notes** for Needs Response and Review Requests items:
-   - Check `vault_state.task_notes` for existing task with matching `github_url` and `type: task`
-   - If found with `status: pending` → reuse (no new note)
-   - If found with `status: done` → new activity, create new task note
-   - If not found → create task note:
-     ```bash
-     obsidian vault={{VAULT_NAME}} create path="04 Data/YYYY/MM/YYYY.MM.DD-gh-task-REPO-NUMBER.md" content="---
-     type: task
-     task: \"Respond to owner/repo#NUMBER — [brief context]\"
-     status: pending
-     due: YYYY-MM-DD
-     priority: medium
-     github_url: GITHUB_URL
-     github_thread_id: \"THREAD_ID\"
-     aliases: [gh-task-REPO-NUMBER]
-     tags: [github, task]
-     created: \"YYYY-MM-DD HH:mm\"
-     modified: \"YYYY-MM-DD HH:mm\"
-     classified_at: \"YYYY-MM-DD HH:mm\"
-     confidence: 1.0
-     ---
+Save `GITHUB_RESULT` for use in Step 4. Do **not** run any additional `gh-fetch`, `obsidian`, or per-thread loops — the script handles everything.
 
-     # Respond to owner/repo#NUMBER
+**Format the `## GitHub` section** from `GITHUB_RESULT` for the daily note and briefing:
+```markdown
+## GitHub
 
-     [owner/repo#NUMBER](GITHUB_URL) | Action needed: [context]
+### Resolved Since Yesterday
+- ~~owner/repo#N~~ — closed ✓
 
-     **Vault note:** [[YYYY.MM.DD-gh-REPO-NUMBER|gh-REPO-NUMBER]]
-     " silent
-     ```
+### Needs Response
+- [ ] [**owner/repo#N** — title](URL) · [[vault_note|vault_alias]]
 
-6. **Auto-resolve stale tasks** from `stale_tasks[]`:
-   - For entries with `should_resolve: true` (closed/merged on GitHub):
-     ```bash
-     obsidian vault={{VAULT_NAME}} property:set path="TASK_PATH" name=status value=done
-     ```
-   - Also check non-actionable threads (FYI, My PRs) against `vault_state.task_notes` — if a pending task exists for a now-FYI thread, mark it done.
+### My PRs
+- [ ] [**owner/repo#N** — title](URL) · [[vault_note|vault_alias]] — last_post_summary
 
-7. **Build the `## GitHub` section** for the daily note. Group by category:
-   ```markdown
-   ## GitHub
+### Review Requests
+- [ ] [**owner/repo#N** — title](URL) · [[vault_note|vault_alias]]
 
-   ### Resolved Since Yesterday
-   - ~~owner/repo#N~~ — reason · [[task-note|task]] ✓
-
-   ### Needs Response
-   - [ ] [**owner/repo#N** — summary](URL) · [[vault-note|notes]]
-
-   ### My PRs
-   - [ ] [**owner/repo#N** — status](URL) · [[vault-note|notes]]
-
-   ### Review Requests
-   - [ ] [**owner/repo#N** — context](URL) · [[vault-note|notes]]
-
-   ### FYI (No Action)
-   - [**owner/repo#N** — summary](URL) · [[vault-note|notes]]
-   ```
-   Rules: omit empty sub-sections, checkboxes for actionable items only, items with vault notes get `· [[filename|notes]]`, items without use markdown URL only.
-
-8. **Git commit** after all GitHub work:
-   ```bash
-   git add -A
-   git commit -m "sb: /today — github sync (N created, M updated, P notifications marked done, Q task notes, R auto-resolved)"
-   ```
-   Skip if no vault changes were made (mark_done.count alone doesn't warrant a commit).
+### FYI (No Action)
+- [**owner/repo#N** — title](URL) · [[vault_note|notes]]
+```
+Rules: omit empty sub-sections, checkboxes for actionable items only, items without vault_note use markdown URL only.
 
 ### Step 3: Check for Recent Digests
 
@@ -254,16 +197,16 @@ Daily note: [[YYYY.MM.DD-daily-note]]
 - Person Name — "follow-up item"
 
 **GitHub — Resolved (N):**
-- ~~owner/repo#123~~ — you responded ✓
+- ~~owner/repo#123~~ — closed ✓
 
 **GitHub — Needs Response (N):**
-- [ ] [**owner/repo#123** — what happened](URL) · [[YYYY.MM.DD-gh-repo-123|notes]]
+- [ ] [**owner/repo#123** — title](URL) · [[YYYY.MM.DD-gh-repo-123|gh-repo-123]]
 
 **GitHub — My PRs (N):**
-- [ ] [**owner/repo#456** — status](URL) · [[YYYY.MM.DD-gh-repo-456|notes]]
+- [ ] [**owner/repo#456** — title](URL) · [[YYYY.MM.DD-gh-repo-456|gh-repo-456]]
 
 **GitHub — Review Requests (N):**
-- [ ] [**owner/repo#789** — context](URL) · [[YYYY.MM.DD-gh-repo-789|notes]]
+- [ ] [**owner/repo#789** — title](URL) · [[YYYY.MM.DD-gh-repo-789|gh-repo-789]]
 
 **Raindrop Inbox (N):** N bookmarks waiting for triage
 

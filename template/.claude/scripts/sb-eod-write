@@ -1,0 +1,275 @@
+#!/bin/bash
+# ============================================================================
+# sb-eod-write — Apply all /eod vault mutations in one batch
+# ============================================================================
+#
+# PURPOSE:
+#   Receives a JSON payload on stdin, applies all vault mutations in parallel
+#   where possible, then commits. Claude never makes individual obsidian calls
+#   for Steps 1-5 of /eod.
+#
+# INPUT (stdin):
+#   {
+#     "classified_items": [{ "old_path", "new_path", "content", "log_entry" }],
+#     "dirty_updates": [{ "path", "classified_at" }],
+#     "meeting_summaries": [{ "path", "summary_property", "summary_section" }],
+#     "daily_note_content": "---\n## Day Summary\n...",
+#     "nav_link_line": "← [[...]] | **date** | [[...]] →",
+#     "inbox_log_clear": true,
+#     "daily_note_path": "04 Data/.../YYYY.MM.DD-daily-note.md",
+#     "commit_message": "sb: /eod — ...",
+#     "commit_details": ["filed ...", "dirty check: ...", ...]
+#   }
+#
+# OUTPUT (stdout):
+#   { "stats": { classified, dirty_updated, meetings_summarized },
+#     "commit_sha": "abc1234", "errors": [] }
+#
+# USAGE:
+#   echo "$WRITE_PAYLOAD" | ".claude/scripts/sb-eod-write"
+#
+# DEPENDENCIES:
+#   - obsidian CLI (vault must be open), jq, python3, git
+#
+# EXIT CODES:
+#   0 — always (errors captured in output JSON)
+# ============================================================================
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VAULT_PATH="$(cd "$SCRIPT_DIR/../.." && pwd)"
+VAULT_NAME="${SECOND_BRAIN_NAME:-second-brain}"
+INBOX_LOG_FULL="${VAULT_PATH}/05 Meta/logs/inbox-log.md"
+
+WORK=$(mktemp -d)
+trap "rm -rf $WORK" EXIT
+
+# ---- Read payload -----------------------------------------------------------
+
+PAYLOAD=$(cat)
+
+if [ -z "$PAYLOAD" ]; then
+  echo '{"stats":{},"commit_sha":"none","errors":["empty payload"]}' >&2
+  exit 0
+fi
+
+# Parse top-level fields
+CLASSIFIED_ITEMS=$(echo "$PAYLOAD" | jq -c '.classified_items // []')
+DIRTY_UPDATES=$(echo "$PAYLOAD" | jq -c '.dirty_updates // []')
+MEETING_SUMMARIES=$(echo "$PAYLOAD" | jq -c '.meeting_summaries // []')
+DAILY_NOTE_CONTENT=$(echo "$PAYLOAD" | jq -r '.daily_note_content // ""')
+NAV_LINK_LINE=$(echo "$PAYLOAD" | jq -r '.nav_link_line // ""')
+INBOX_LOG_CLEAR=$(echo "$PAYLOAD" | jq -r '.inbox_log_clear // false')
+DAILY_NOTE_PATH=$(echo "$PAYLOAD" | jq -r '.daily_note_path // ""')
+COMMIT_MESSAGE=$(echo "$PAYLOAD" | jq -r '.commit_message // "sb: /eod — processed"')
+
+CLASSIFIED_COUNT=$(echo "$CLASSIFIED_ITEMS" | jq 'length')
+DIRTY_COUNT=$(echo "$DIRTY_UPDATES" | jq 'length')
+MEETING_COUNT=$(echo "$MEETING_SUMMARIES" | jq 'length')
+
+echo "sb-eod-write: classified=$CLASSIFIED_COUNT dirty=$DIRTY_COUNT meetings=$MEETING_COUNT" >&2
+
+# ---- Step 1: Create new typed notes (parallel) ------------------------------
+
+echo "Creating classified notes..." >&2
+
+IDX=0
+while IFS= read -r item; do
+  new_path=$(echo "$item" | jq -r '.new_path // ""')
+  content=$(echo "$item" | jq -r '.content // ""')
+  [ -z "$new_path" ] && continue
+  idx=$IDX; IDX=$((IDX + 1))
+  (
+    obsidian "vault=${VAULT_NAME}" create path="$new_path" content="$content" silent 2>/dev/null \
+      && echo "ok" > "$WORK/create_${idx}.txt" \
+      || echo "err" > "$WORK/create_${idx}.txt"
+  ) &
+done < <(echo "$CLASSIFIED_ITEMS" | jq -c '.[]' 2>/dev/null || true)
+wait
+
+# ---- Step 2: Delete old inbox files (parallel) ------------------------------
+
+echo "Deleting old inbox files..." >&2
+
+IDX=0
+while IFS= read -r item; do
+  old_path=$(echo "$item" | jq -r '.old_path // ""')
+  [ -z "$old_path" ] && continue
+  full_old="${VAULT_PATH}/${old_path}"
+  idx=$IDX; IDX=$((IDX + 1))
+  (
+    if [ -f "$full_old" ]; then
+      rm "$full_old" 2>/dev/null && echo "ok" > "$WORK/delete_${idx}.txt" \
+        || echo "err" > "$WORK/delete_${idx}.txt"
+    else
+      echo "skip" > "$WORK/delete_${idx}.txt"
+    fi
+  ) &
+done < <(echo "$CLASSIFIED_ITEMS" | jq -c '.[]' 2>/dev/null || true)
+wait
+
+# ---- Step 3: Update dirty notes classified_at (parallel) --------------------
+
+echo "Updating dirty notes..." >&2
+
+IDX=0
+while IFS= read -r item; do
+  path=$(echo "$item" | jq -r '.path // ""')
+  classified_at=$(echo "$item" | jq -r '.classified_at // ""')
+  [ -z "$path" ] || [ -z "$classified_at" ] && continue
+  idx=$IDX; IDX=$((IDX + 1))
+  (
+    obsidian "vault=${VAULT_NAME}" property:set path="$path" name=classified_at value="$classified_at" silent 2>/dev/null \
+      && echo "ok" > "$WORK/dirty_${idx}.txt" \
+      || echo "err" > "$WORK/dirty_${idx}.txt"
+  ) &
+done < <(echo "$DIRTY_UPDATES" | jq -c '.[]' 2>/dev/null || true)
+wait
+
+# ---- Step 4+5: Set meeting properties + append sections (parallel) ----------
+# Each summary targets a different file — safe to parallelize
+
+echo "Writing meeting summaries..." >&2
+
+IDX=0
+while IFS= read -r item; do
+  path=$(echo "$item" | jq -r '.path // ""')
+  summary_property=$(echo "$item" | jq -r '.summary_property // ""')
+  summary_section=$(echo "$item" | jq -r '.summary_section // ""')
+  [ -z "$path" ] && continue
+  idx=$IDX; IDX=$((IDX + 1))
+  # Write section to temp file (avoids shell escaping issues with obsidian CLI)
+  echo "$summary_section" > "$WORK/meeting_section_${idx}.txt"
+  (
+    # Set frontmatter property
+    if [ -n "$summary_property" ]; then
+      obsidian "vault=${VAULT_NAME}" property:set path="$path" name=summary value="$summary_property" silent 2>/dev/null || true
+    fi
+    # Append summary section
+    if [ -n "$summary_section" ]; then
+      obsidian "vault=${VAULT_NAME}" append path="$path" \
+        content="$(cat "$WORK/meeting_section_${idx}.txt")" silent 2>/dev/null || true
+    fi
+    echo "ok" > "$WORK/meeting_done_${idx}.txt"
+  ) &
+done < <(echo "$MEETING_SUMMARIES" | jq -c '.[]' 2>/dev/null || true)
+wait
+
+# ---- Step 6: Clear inbox-log.md (direct file write) -------------------------
+
+if [ "$INBOX_LOG_CLEAR" = "true" ]; then
+  echo "Clearing inbox log..." >&2
+  printf '# Inbox Log\n> Classification decisions are appended here automatically. Rolled into daily notes by /eod.\n' \
+    > "$INBOX_LOG_FULL"
+fi
+
+# ---- Step 7+8: Update daily note (nav link + day summary) -------------------
+
+if [ -n "$DAILY_NOTE_PATH" ]; then
+  DAILY_NOTE_FULL="${VAULT_PATH}/${DAILY_NOTE_PATH}"
+  echo "Updating daily note: $DAILY_NOTE_PATH" >&2
+
+  # 7a. Insert/update nav link near top of file (after first heading line)
+  if [ -n "$NAV_LINK_LINE" ] && [ -f "$DAILY_NOTE_FULL" ]; then
+    NAV_LINE_ESCAPED="$NAV_LINK_LINE"
+    python3 << PYEOF
+import re, sys
+
+with open("""$DAILY_NOTE_FULL""") as f:
+    content = f.read()
+
+nav_line = """$NAV_LINE_ESCAPED"""
+nav_pattern = re.compile(r'^←[^\n]*', re.MULTILINE)
+
+if nav_pattern.search(content):
+    # Replace existing nav line
+    updated = nav_pattern.sub(nav_line, content, count=1)
+else:
+    # Insert after first heading (# ...) line
+    lines = content.split('\n')
+    insert_at = 1  # default: after first line
+    for i, line in enumerate(lines):
+        if line.startswith('#') and not line.startswith('---'):
+            insert_at = i + 1
+            break
+    lines.insert(insert_at, nav_line)
+    updated = '\n'.join(lines)
+
+with open("""$DAILY_NOTE_FULL""", 'w') as f:
+    f.write(updated)
+PYEOF
+  fi
+
+  # 7b. Append/replace Day Summary section
+  if [ -n "$DAILY_NOTE_CONTENT" ]; then
+    echo "$DAILY_NOTE_CONTENT" > "$WORK/day_summary.txt"
+
+    if [ -f "$DAILY_NOTE_FULL" ]; then
+      python3 << PYEOF
+with open("""$DAILY_NOTE_FULL""") as f:
+    current = f.read()
+
+with open("""$WORK/day_summary.txt""") as f:
+    new_section = f.read()
+
+# Find ## Day Summary boundary
+marker = '\n## Day Summary'
+idx = current.find(marker)
+if idx != -1:
+    base = current[:idx]
+else:
+    base = current.rstrip('\n')
+
+result = base + '\n' + new_section
+with open("""$DAILY_NOTE_FULL""", 'w') as f:
+    f.write(result)
+PYEOF
+    else
+      # Daily note doesn't exist — create via obsidian
+      obsidian "vault=${VAULT_NAME}" create path="$DAILY_NOTE_PATH" \
+        content="$DAILY_NOTE_CONTENT" silent 2>/dev/null || true
+    fi
+  fi
+fi
+
+# ---- Step 9: Git commit ------------------------------------------------------
+
+echo "Committing..." >&2
+
+cd "$VAULT_PATH"
+git add -A 2>/dev/null || true
+
+if git diff --cached --quiet 2>/dev/null; then
+  echo "Nothing to commit." >&2
+  COMMIT_SHA="none"
+else
+  # Build commit body from commit_details array
+  COMMIT_BODY=$(echo "$PAYLOAD" | jq -r '.commit_details // [] | map("- " + .) | join("\n")' 2>/dev/null || true)
+
+  if [ -n "$COMMIT_BODY" ]; then
+    git commit -m "$COMMIT_MESSAGE" -m "$COMMIT_BODY" 2>/dev/null
+  else
+    git commit -m "$COMMIT_MESSAGE" 2>/dev/null
+  fi
+  COMMIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+fi
+
+echo "sb-eod-write complete. commit=$COMMIT_SHA" >&2
+
+# ---- Output JSON ------------------------------------------------------------
+
+jq -n \
+  --argjson classified "$CLASSIFIED_COUNT" \
+  --argjson dirty "$DIRTY_COUNT" \
+  --argjson meetings "$MEETING_COUNT" \
+  --arg commit_sha "$COMMIT_SHA" \
+  '{
+    stats: {
+      classified: $classified,
+      dirty_updated: $dirty,
+      meetings_summarized: $meetings
+    },
+    commit_sha: $commit_sha,
+    errors: []
+  }'

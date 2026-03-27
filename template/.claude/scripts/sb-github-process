@@ -1,0 +1,634 @@
+#!/bin/bash
+# ============================================================================
+# sb-github-process — Process GitHub sync data into vault notes + briefing JSON
+# ============================================================================
+#
+# PURPOSE:
+#   Takes the JSON output of sb-github-sync (via stdin) and:
+#   - Deduplicates + categorizes threads across all discovery sources
+#   - Runs gh-fetch in parallel for actionable threads
+#   - Creates or updates vault notes (type: github)
+#   - Creates task notes for actionable items
+#   - Auto-resolves stale gh-task notes
+#   - Commits all vault changes
+#   - Outputs briefing-ready JSON on stdout
+#
+# USAGE:
+#   sb-github-sync | sb-github-process
+#   sb-github-process < sync-output.json
+#
+# OUTPUT (stdout):
+#   {
+#     "needs_response": [{key, url, title, vault_note, vault_alias, task_note, task_alias}...],
+#     "review_requests": [...],
+#     "my_prs": [...],
+#     "fyi": [...],
+#     "resolved": [{key, github_state}...],
+#     "stats": {created, updated, tasks_created, auto_resolved, commit_message}
+#   }
+#
+# DEPENDENCIES:
+#   - gh CLI (authenticated), jq, obsidian CLI (vault must be open)
+#   - gh-fetch script (sibling in same directory)
+#
+# EXIT CODES:
+#   0 — success (JSON on stdout, even if some thread fetches failed)
+#   1 — fatal error (bad input, missing deps)
+# ============================================================================
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VAULT_PATH="$(cd "$SCRIPT_DIR/../.." && pwd)"
+DATA_DIR="$VAULT_PATH/04 Data"
+VAULT_NAME="${SECOND_BRAIN_NAME:-second-brain}"
+GH_FETCH="$SCRIPT_DIR/gh-fetch"
+
+NOW_DT=$(date "+%Y-%m-%d %H:%M")
+TODAY=$(date "+%Y-%m-%d")
+YEAR=$(date "+%Y")
+MONTH=$(date "+%m")
+DOT_DATE=$(date "+%Y.%m.%d")
+
+WORK=$(mktemp -d)
+trap "rm -rf $WORK" EXIT
+
+# ---- Validate ---------------------------------------------------------------
+
+if [ ! -x "$GH_FETCH" ]; then
+  echo '{"error":"gh-fetch not found at '"$GH_FETCH"'"}' >&2
+  exit 1
+fi
+
+for cmd in jq gh; do
+  command -v "$cmd" &>/dev/null || { echo "{\"error\":\"$cmd not found\"}" >&2; exit 1; }
+done
+
+# ---- Read input -------------------------------------------------------------
+
+INPUT=$(cat)
+if ! echo "$INPUT" | jq empty 2>/dev/null; then
+  echo '{"error":"Invalid JSON on stdin"}' >&2
+  exit 1
+fi
+
+echo "sb-github-process: parsing sync data..." >&2
+
+VAULT_GITHUB_NOTES=$(echo "$INPUT" | jq '.vault_state.github_notes // []')
+VAULT_TASK_NOTES=$(echo "$INPUT"  | jq '.vault_state.task_notes // []')
+STALE_TASKS=$(echo "$INPUT"       | jq '.stale_tasks // []')
+NOTIFICATIONS=$(echo "$INPUT"     | jq '.discovery.notifications // []')
+INVOLVED_RAW=$(echo "$INPUT"      | jq -r '.discovery.involved_raw // ""')
+MY_PRS_RAW=$(echo "$INPUT"        | jq -r '.discovery.my_prs_raw // ""')
+
+# ---- Step 1: Build unified, deduplicated thread list -----------------------
+# Collect candidates from all sources into NDJSON, then dedup (lowest priority wins)
+# Priority: 0=needs_response, 1=review_request, 2=my_prs, 3=fyi
+
+> "$WORK/all_threads.ndjson"
+
+# Source A: notifications (have reason + thread_id + URL)
+while IFS= read -r n; do
+  url=$(echo "$n" | jq -r '.url // ""')
+  [ -z "$url" ] || [[ "$url" == "null" ]] && continue
+  [[ "$url" =~ github\.com/([^/]+/[^/]+)/(issues|pull)/([0-9]+) ]] || continue
+  owner_repo="${BASH_REMATCH[1]}"
+  gh_type="${BASH_REMATCH[2]}"
+  number="${BASH_REMATCH[3]}"
+  key="${owner_repo}#${number}"
+  reason=$(echo "$n" | jq -r '.reason // "subscribed"')
+  thread_id=$(echo "$n" | jq -r '.thread_id // ""')
+  updated=$(echo "$n" | jq -r '.updated // ""')
+  title=$(echo "$n" | jq -r '.title // ""')
+  case "$reason" in
+    mention|comment|assign|state_change) cat="needs_response"; prio=0 ;;
+    review_requested) cat="review_request"; prio=1 ;;
+    *) cat="fyi"; prio=3 ;;
+  esac
+  jq -nc \
+    --arg key "$key" --arg url "$url" --arg title "$title" \
+    --arg gh_type "$gh_type" --arg reason "$reason" --arg cat "$cat" \
+    --argjson prio "$prio" --arg owner_repo "$owner_repo" \
+    --arg number "$number" --arg thread_id "$thread_id" --arg updated "$updated" \
+    '{key:$key,url:$url,title:$title,gh_type:$gh_type,reason:$reason,category:$cat,
+      priority:$prio,owner_repo:$owner_repo,number:$number,
+      thread_id:$thread_id,updated:$updated,source:"notifications"}'
+done < <(echo "$NOTIFICATIONS" | jq -c '.[]' 2>/dev/null) >> "$WORK/all_threads.ndjson" || true
+
+# Source B: my_prs_raw — "owner/repo#N\tcreated\ttitle\tlast_post_summary"
+if [ -n "$MY_PRS_RAW" ]; then
+  while IFS=$'\t' read -r key_f created_f title_f summary_f; do
+    [[ "$key_f" =~ ^([^/]+/[^#]+)#([0-9]+)$ ]] || continue
+    owner_repo="${BASH_REMATCH[1]}"; number="${BASH_REMATCH[2]}"
+    url="https://github.com/${owner_repo}/pull/${number}"
+    jq -nc \
+      --arg key "$key_f" --arg url "$url" --arg title "${title_f:-}" \
+      --arg owner_repo "$owner_repo" --arg number "$number" \
+      --arg summary "${summary_f:-no comments}" \
+      '{key:$key,url:$url,title:$title,gh_type:"pull",reason:"author",
+        category:"my_prs",priority:2,owner_repo:$owner_repo,number:$number,
+        thread_id:"",updated:"",last_post_summary:$summary,source:"my_prs"}'
+  done < <(echo "$MY_PRS_RAW" | grep -E '^[^#([:space:]].*#[0-9]+' || true) \
+    >> "$WORK/all_threads.ndjson" || true
+fi
+
+# Source C: involved_raw — "owner/repo#N\ttype\ttitle"
+if [ -n "$INVOLVED_RAW" ]; then
+  while IFS=$'\t' read -r key_f type_f title_f; do
+    [[ "$key_f" =~ ^([^/]+/[^#]+)#([0-9]+)$ ]] || continue
+    owner_repo="${BASH_REMATCH[1]}"; number="${BASH_REMATCH[2]}"
+    gh_type=$([ "$type_f" = "pr" ] && echo "pull" || echo "issues")
+    url="https://github.com/${owner_repo}/${gh_type}/${number}"
+    jq -nc \
+      --arg key "$key_f" --arg url "$url" --arg title "${title_f:-}" \
+      --arg gh_type "$gh_type" --arg owner_repo "$owner_repo" --arg number "$number" \
+      '{key:$key,url:$url,title:$title,gh_type:$gh_type,reason:"involved",
+        category:"fyi",priority:3,owner_repo:$owner_repo,number:$number,
+        thread_id:"",updated:"",source:"involved"}'
+  done < <(echo "$INVOLVED_RAW" | grep -E '^[^#([:space:]].*#[0-9]+' || true) \
+    >> "$WORK/all_threads.ndjson" || true
+fi
+
+# Dedup: group by key, keep entry with lowest priority number
+if [ -s "$WORK/all_threads.ndjson" ]; then
+  jq -s 'group_by(.key) | map(sort_by(.priority) | .[0])' \
+    "$WORK/all_threads.ndjson" > "$WORK/threads.json"
+else
+  echo '[]' > "$WORK/threads.json"
+fi
+
+THREAD_COUNT=$(jq 'length' "$WORK/threads.json")
+echo "  Threads: $THREAD_COUNT (deduped)" >&2
+
+# ---- Step 2: Parallel gh-fetch for actionable threads ----------------------
+# Fetch: needs_response, review_request, my_prs
+# FYI: only fetch if vault note already exists (for incremental updates)
+
+echo "Fetching thread details (parallel)..." >&2
+
+FETCH_PIDS=()
+
+while IFS= read -r thread; do
+  key=$(echo "$thread" | jq -r '.key')
+  url=$(echo "$thread" | jq -r '.url')
+  cat=$(echo "$thread" | jq -r '.category')
+  owner_repo=$(echo "$thread" | jq -r '.owner_repo')
+  number=$(echo "$thread" | jq -r '.number')
+  updated=$(echo "$thread" | jq -r '.updated // ""')
+
+  safe_key=$(echo "$key" | tr '/#' '_')
+  fetch_out="$WORK/fetch_${safe_key}.json"
+  fetch_meta="$WORK/meta_${safe_key}.json"
+
+  # For FYI, only process if vault note already exists
+  existing_note=""
+  existing_note=$(echo "$VAULT_GITHUB_NOTES" | jq -c \
+    --arg repo "$owner_repo" --arg num "$number" \
+    '[.[] | select(.github_repo == $repo and (.github_number | tostring) == $num)] | .[0] // empty' \
+    2>/dev/null || true)
+
+  if [ "$cat" = "fyi" ] && [ -z "$existing_note" ]; then
+    jq -nc --arg key "$key" --arg url "$url" --arg cat "$cat" \
+      '{action:"no_fetch",key:$key,url:$url,category:$cat}' > "$fetch_meta"
+    continue
+  fi
+
+  if [ -n "$existing_note" ] && [ "$existing_note" != "null" ]; then
+    last_synced=$(echo "$existing_note" | jq -r '.github_last_synced // ""')
+    note_path=$(echo "$existing_note" | jq -r '.path // ""')
+    note_filename=$(basename "${note_path%.md}")
+
+    # Skip if thread not updated since last sync
+    if [ -n "$last_synced" ] && [ -n "$updated" ] && [[ "$updated" < "$last_synced" ]]; then
+      echo "$existing_note" | jq -c \
+        --arg action "skip" --arg key "$key" --arg url "$url" --arg cat "$cat" \
+        --arg note_filename "$note_filename" \
+        '. + {action:$action,key:$key,url:$url,category:$cat,note_filename:$note_filename}' \
+        > "$fetch_meta"
+      continue
+    fi
+
+    # Incremental fetch
+    echo "$existing_note" | jq -c \
+      --arg action "update" --arg key "$key" --arg url "$url" --arg cat "$cat" \
+      --arg note_filename "$note_filename" \
+      '. + {action:$action,key:$key,url:$url,category:$cat,note_filename:$note_filename}' \
+      > "$fetch_meta"
+    (
+      "$GH_FETCH" "$url" --since "$last_synced" > "$fetch_out" 2>"$WORK/err_${safe_key}.txt" || \
+        echo '{}' > "$fetch_out"
+    ) &
+    FETCH_PIDS+=($!)
+  else
+    # New thread — full fetch
+    jq -nc --arg action "create" --arg key "$key" --arg url "$url" --arg cat "$cat" \
+      '{action:$action,key:$key,url:$url,category:$cat}' > "$fetch_meta"
+    (
+      "$GH_FETCH" "$url" > "$fetch_out" 2>"$WORK/err_${safe_key}.txt" || \
+        echo '{}' > "$fetch_out"
+    ) &
+    FETCH_PIDS+=($!)
+  fi
+
+done < <(jq -c '.[]' "$WORK/threads.json")
+
+# Wait for all fetches
+if [ ${#FETCH_PIDS[@]} -gt 0 ]; then
+  echo "  Waiting for ${#FETCH_PIDS[@]} parallel fetches..." >&2
+  wait "${FETCH_PIDS[@]}" 2>/dev/null || true
+fi
+echo "  Fetches complete." >&2
+
+# ---- Step 3: Create/update vault notes -------------------------------------
+
+echo "Writing vault notes..." >&2
+
+CREATED_COUNT=0
+UPDATED_COUNT=0
+mkdir -p "$DATA_DIR/$YEAR/$MONTH"
+
+> "$WORK/note_results.ndjson"
+
+while IFS= read -r thread; do
+  key=$(echo "$thread" | jq -r '.key')
+  url=$(echo "$thread" | jq -r '.url')
+  cat=$(echo "$thread" | jq -r '.category')
+  owner_repo=$(echo "$thread" | jq -r '.owner_repo')
+  number=$(echo "$thread" | jq -r '.number')
+  thread_title=$(echo "$thread" | jq -r '.title // ""')
+
+  safe_key=$(echo "$key" | tr '/#' '_')
+  fetch_out="$WORK/fetch_${safe_key}.json"
+  fetch_meta="$WORK/meta_${safe_key}.json"
+
+  [ -f "$fetch_meta" ] || continue
+  action=$(jq -r '.action' "$fetch_meta")
+
+  # Record existing notes for briefing even when no-op
+  if [ "$action" = "skip" ] || [ "$action" = "no_fetch" ]; then
+    note_filename=$(jq -r '.note_filename // ""' "$fetch_meta")
+    if [ -n "$note_filename" ] && [ "$note_filename" != "null" ]; then
+      repo_name=$(echo "$owner_repo" | cut -d'/' -f2)
+      alias="gh-${repo_name}-${number}"
+      jq -nc --arg key "$key" --arg note "$note_filename" --arg alias "$alias" \
+        --arg cat "$cat" --arg url "$url" --arg title "$thread_title" \
+        '{key:$key,vault_note:$note,vault_alias:$alias,category:$cat,url:$url,title:$title}' \
+        >> "$WORK/note_results.ndjson"
+    fi
+    continue
+  fi
+
+  # Validate fetch output
+  if [ ! -f "$fetch_out" ] || ! jq empty "$fetch_out" 2>/dev/null || \
+     [ "$(jq 'keys | length' "$fetch_out")" -le 1 ]; then
+    echo "  WARN: fetch failed or empty for $key" >&2
+    continue
+  fi
+
+  # Extract fetch fields
+  fetch_title=$(jq -r '.metadata.title // ""' "$fetch_out")
+  fetch_state=$(jq -r '.metadata.state // "open"' "$fetch_out")
+  fetch_author=$(jq -r '.metadata.author // ""' "$fetch_out")
+  fetch_created=$(jq -r '.metadata.created_at // "" | split("T")[0]' "$fetch_out")
+  fetch_labels=$(jq -c '.metadata.labels // []' "$fetch_out")
+  fetch_assignees=$(jq -c '.metadata.assignees // []' "$fetch_out")
+  fetch_newest=$(jq -r '.newest_activity // ""' "$fetch_out")
+  fetch_newest_date="${fetch_newest%%T*}"
+  is_pr=$(jq -r '.is_pr // false' "$fetch_out")
+  comment_count=$(jq -r '.comment_count // 0' "$fetch_out")
+  event_count=$(jq -r '.event_count // 0' "$fetch_out")
+
+  # Use fetched title if thread title is empty
+  [ -z "$thread_title" ] || [ "$thread_title" = "null" ] && thread_title="$fetch_title"
+
+  # Derive naming
+  repo_name=$(echo "$owner_repo" | cut -d'/' -f2)
+  alias="gh-${repo_name}-${number}"
+  filename="${DOT_DATE}-${alias}.md"
+  note_path_rel="04 Data/${YEAR}/${MONTH}/${filename}"
+
+  # Build last-N-comments block for summary
+  last_comments=$(jq -r '
+    .comments | if length > 0 then
+      .[-3:] | map(
+        "- **@\(.author)** (\(.date | split("T")[0])): " +
+        (.body | gsub("[\r\n]+"; " ") | .[0:250])
+      ) | join("\n")
+    else "(no comments)"
+    end' "$fetch_out")
+
+  if [ "$action" = "create" ]; then
+    gh_type_label=$([ "$is_pr" = "true" ] && echo "PR" || echo "Issue")
+    labels_str=$(echo "$fetch_labels" | jq -r 'if length>0 then join(", ") else "none" end')
+    assignees_str=$(echo "$fetch_assignees" | jq -r 'if length>0 then map("@"+.) | join(", ") else "unassigned" end')
+    pr_type=$([ "$is_pr" = "true" ] && echo "pr" || echo "issue")
+
+    pr_extra=""
+    if [ "$is_pr" = "true" ]; then
+      pr_draft=$(jq -r '.pr_specific.draft // false' "$fetch_out")
+      pr_base=$(jq -r '.pr_specific.base // ""' "$fetch_out")
+      pr_extra="github_draft: ${pr_draft}
+github_base_branch: \"${pr_base}\""
+    fi
+
+    note_content="---
+type: github
+github_type: \"${pr_type}\"
+github_repo: \"${owner_repo}\"
+github_number: ${number}
+github_url: \"${url}\"
+github_state: \"${fetch_state}\"
+github_author: \"${fetch_author}\"
+github_labels: ${fetch_labels}
+github_assignees: ${fetch_assignees}
+github_last_synced: \"${fetch_newest}\"
+created: \"${NOW_DT}\"
+modified: \"${NOW_DT}\"
+aliases: [${alias}]
+tags: [github]
+classified_at: \"${NOW_DT}\"
+confidence: 1.0
+${pr_extra}
+---
+
+# ${fetch_title}
+
+[${owner_repo}#${number}](${url}) | Created ${fetch_created} by @${fetch_author}
+
+## My Notes
+
+
+## Activity Summaries
+
+### ${TODAY} — Initial import (${fetch_created} to ${fetch_newest_date}, ${comment_count} comments)
+
+**State:** ${fetch_state} | **Type:** ${gh_type_label} | **Labels:** ${labels_str}
+**Assignees:** ${assignees_str}
+
+${last_comments}
+"
+
+    if obsidian "vault=${VAULT_NAME}" create "path=${note_path_rel}" "content=${note_content}" silent 2>/dev/null; then
+      jq -nc --arg key "$key" --arg note "${filename%.md}" --arg alias "$alias" \
+        --arg cat "$cat" --arg url "$url" --arg title "$fetch_title" \
+        '{key:$key,vault_note:$note,vault_alias:$alias,category:$cat,url:$url,title:$title}' \
+        >> "$WORK/note_results.ndjson"
+      CREATED_COUNT=$((CREATED_COUNT + 1))
+      echo "  Created: $alias" >&2
+    else
+      echo "  WARN: obsidian create failed for $key" >&2
+    fi
+
+  elif [ "$action" = "update" ]; then
+    existing_path=$(jq -r '.path // ""' "$fetch_meta")
+    note_filename_existing=$(jq -r '.note_filename // ""' "$fetch_meta")
+    [ -z "$existing_path" ] && { echo "  WARN: no path for $key" >&2; continue; }
+
+    # No new activity — skip update but record for briefing
+    if [ "$comment_count" -eq 0 ] && [ "$event_count" -eq 0 ]; then
+      echo "  NO-OP: $key (no new activity)" >&2
+      jq -nc --arg key "$key" --arg note "$note_filename_existing" --arg alias "$alias" \
+        --arg cat "$cat" --arg url "$url" --arg title "$fetch_title" \
+        '{key:$key,vault_note:$note,vault_alias:$alias,category:$cat,url:$url,title:$title}' \
+        >> "$WORK/note_results.ndjson"
+      continue
+    fi
+
+    last_synced_display=$(jq -r '.github_last_synced // "unknown"' "$fetch_meta" | cut -c1-10)
+
+    # Update frontmatter properties
+    obsidian "vault=${VAULT_NAME}" "property:set" "path=${existing_path}" \
+      name=github_state "value=${fetch_state}" 2>/dev/null || true
+    obsidian "vault=${VAULT_NAME}" "property:set" "path=${existing_path}" \
+      name=github_labels "value=${fetch_labels}" type=list 2>/dev/null || true
+    obsidian "vault=${VAULT_NAME}" "property:set" "path=${existing_path}" \
+      name=github_assignees "value=${fetch_assignees}" type=list 2>/dev/null || true
+    obsidian "vault=${VAULT_NAME}" "property:set" "path=${existing_path}" \
+      name=github_last_synced "value=${fetch_newest}" 2>/dev/null || true
+    obsidian "vault=${VAULT_NAME}" "property:set" "path=${existing_path}" \
+      name=modified "value=${NOW_DT}" 2>/dev/null || true
+
+    # Append activity summary
+    summary_block="
+### ${TODAY} — Update (${last_synced_display} to ${fetch_newest_date}, ${comment_count} new comments)
+
+${last_comments}
+"
+    if obsidian "vault=${VAULT_NAME}" append "path=${existing_path}" \
+        "content=${summary_block}" silent 2>/dev/null; then
+      jq -nc --arg key "$key" --arg note "$note_filename_existing" --arg alias "$alias" \
+        --arg cat "$cat" --arg url "$url" --arg title "$fetch_title" \
+        '{key:$key,vault_note:$note,vault_alias:$alias,category:$cat,url:$url,title:$title}' \
+        >> "$WORK/note_results.ndjson"
+      UPDATED_COUNT=$((UPDATED_COUNT + 1))
+      echo "  Updated: $note_filename_existing" >&2
+    else
+      echo "  WARN: obsidian append failed for $key" >&2
+    fi
+  fi
+
+done < <(jq -c '.[]' "$WORK/threads.json")
+
+echo "  Vault notes: ${CREATED_COUNT} created, ${UPDATED_COUNT} updated" >&2
+
+# ---- Step 4: Create task notes ---------------------------------------------
+
+echo "Creating task notes..." >&2
+
+TASKS_CREATED=0
+NOTE_RESULTS=$([ -s "$WORK/note_results.ndjson" ] && jq -s '.' "$WORK/note_results.ndjson" || echo '[]')
+
+> "$WORK/task_results.ndjson"
+
+while IFS= read -r thread; do
+  key=$(echo "$thread" | jq -r '.key')
+  url=$(echo "$thread" | jq -r '.url')
+  cat=$(echo "$thread" | jq -r '.category')
+  owner_repo=$(echo "$thread" | jq -r '.owner_repo')
+  number=$(echo "$thread" | jq -r '.number')
+  title=$(echo "$thread" | jq -r '.title // ""')
+  thread_id=$(echo "$thread" | jq -r '.thread_id // ""')
+
+  # Check for existing pending task
+  existing_task=$(echo "$VAULT_TASK_NOTES" | jq -c \
+    --arg url "$url" '.[] | select(.github_url == $url and .status == "pending")' \
+    2>/dev/null | head -1 || true)
+
+  if [ -n "$existing_task" ]; then
+    # Reuse existing — record it for briefing
+    task_file=$(echo "$existing_task" | jq -r '.file // ""')
+    repo_name=$(echo "$owner_repo" | cut -d'/' -f2)
+    task_alias="gh-task-${repo_name}-${number}"
+    jq -nc --arg key "$key" --arg task_note "$task_file" --arg task_alias "$task_alias" \
+      '{key:$key,task_note:$task_note,task_alias:$task_alias}' \
+      >> "$WORK/task_results.ndjson"
+    continue
+  fi
+
+  # Create new task note
+  repo_name=$(echo "$owner_repo" | cut -d'/' -f2)
+  task_alias="gh-task-${repo_name}-${number}"
+  task_filename="${DOT_DATE}-${task_alias}.md"
+  task_path_rel="04 Data/${YEAR}/${MONTH}/${task_filename}"
+
+  action_context=$([ "$cat" = "needs_response" ] && echo "Needs response" || echo "Review requested")
+
+  # Vault note link if available
+  vault_note_name=$(echo "$NOTE_RESULTS" | jq -r \
+    --arg k "$key" '.[] | select(.key == $k) | .vault_note' | head -1 || true)
+  vault_alias_name=$(echo "$NOTE_RESULTS" | jq -r \
+    --arg k "$key" '.[] | select(.key == $k) | .vault_alias' | head -1 || true)
+  vault_link=""
+  if [ -n "$vault_note_name" ] && [ "$vault_note_name" != "null" ]; then
+    vault_link="**Vault note:** [[${vault_note_name}|${vault_alias_name}]]"
+  fi
+
+  # Truncate title for task field
+  short_title="${title:0:60}"
+
+  task_content="---
+type: task
+task: \"Respond to ${key} — ${short_title}\"
+status: pending
+due: ${TODAY}
+priority: medium
+github_url: \"${url}\"
+github_thread_id: \"${thread_id}\"
+aliases: [${task_alias}]
+tags: [github, task]
+created: \"${NOW_DT}\"
+modified: \"${NOW_DT}\"
+classified_at: \"${NOW_DT}\"
+confidence: 1.0
+---
+
+# Respond to ${key}
+
+[${key}](${url}) | ${action_context}
+
+${vault_link}"
+
+  if obsidian "vault=${VAULT_NAME}" create "path=${task_path_rel}" \
+      "content=${task_content}" silent 2>/dev/null; then
+    jq -nc --arg key "$key" --arg task_note "${task_filename%.md}" \
+      --arg task_alias "$task_alias" \
+      '{key:$key,task_note:$task_note,task_alias:$task_alias}' \
+      >> "$WORK/task_results.ndjson"
+    TASKS_CREATED=$((TASKS_CREATED + 1))
+    echo "  Task: $task_alias" >&2
+  else
+    echo "  WARN: failed to create task for $key" >&2
+  fi
+
+done < <(jq -c '.[] | select(.category == "needs_response" or .category == "review_request")' \
+  "$WORK/threads.json")
+
+echo "  Task notes: ${TASKS_CREATED} created" >&2
+
+# ---- Step 5: Auto-resolve stale tasks --------------------------------------
+
+echo "Resolving stale tasks..." >&2
+
+AUTO_RESOLVED=0
+
+# Resolve tasks for closed/merged threads from stale_tasks
+while IFS= read -r stale; do
+  task_path=$(echo "$stale" | jq -r '.path')
+  key=$(echo "$stale" | jq -r '.key')
+  if obsidian "vault=${VAULT_NAME}" "property:set" "path=${task_path}" \
+      name=status value=done 2>/dev/null; then
+    AUTO_RESOLVED=$((AUTO_RESOLVED + 1))
+    echo "  Resolved stale: $key" >&2
+  fi
+done < <(echo "$STALE_TASKS" | jq -c '.[] | select(.should_resolve == true)' 2>/dev/null || true)
+
+# Also resolve pending tasks for threads that are now FYI (no longer actionable)
+while IFS= read -r thread; do
+  key=$(echo "$thread" | jq -r '.key')
+  url=$(echo "$thread" | jq -r '.url')
+  existing_task=$(echo "$VAULT_TASK_NOTES" | jq -c \
+    --arg url "$url" '.[] | select(.github_url == $url and .status == "pending")' \
+    2>/dev/null | head -1 || true)
+  if [ -n "$existing_task" ]; then
+    task_path=$(echo "$existing_task" | jq -r '.path // ""')
+    [ -n "$task_path" ] && [ "$task_path" != "null" ] && \
+      obsidian "vault=${VAULT_NAME}" "property:set" "path=${task_path}" \
+        name=status value=done 2>/dev/null && \
+      AUTO_RESOLVED=$((AUTO_RESOLVED + 1)) || true
+  fi
+done < <(jq -c '.[] | select(.category == "fyi" or .category == "my_prs")' \
+  "$WORK/threads.json")
+
+echo "  Auto-resolved: ${AUTO_RESOLVED}" >&2
+
+# ---- Step 6: Git commit ----------------------------------------------------
+
+COMMIT_MSG="sb: /today — github sync (${CREATED_COUNT} created, ${UPDATED_COUNT} updated, ${TASKS_CREATED} task notes, ${AUTO_RESOLVED} auto-resolved)"
+
+git -C "$VAULT_PATH" add "$DATA_DIR" 2>/dev/null || true
+if git -C "$VAULT_PATH" diff --cached --quiet 2>/dev/null; then
+  echo "  No vault changes to commit." >&2
+else
+  git -C "$VAULT_PATH" commit -m "$COMMIT_MSG" 2>/dev/null && \
+    echo "  Committed: $COMMIT_MSG" >&2 || \
+    echo "  WARN: git commit failed" >&2
+fi
+
+# ---- Step 7: Build briefing JSON -------------------------------------------
+
+echo "Building briefing JSON..." >&2
+
+NOTE_RESULTS=$([ -s "$WORK/note_results.ndjson" ] && jq -s '.' "$WORK/note_results.ndjson" || echo '[]')
+TASK_RESULTS=$([ -s "$WORK/task_results.ndjson" ] && jq -s '.' "$WORK/task_results.ndjson" || echo '[]')
+
+# Helper: enrich a thread array with vault/task note references
+# Uses map(select(...)) | first to avoid duplicates when key matches multiple entries
+enrich_threads() {
+  local category="$1"
+  jq -c --argjson notes "$NOTE_RESULTS" --argjson tasks "$TASK_RESULTS" \
+    --arg cat "$category" \
+    '[.[] | select(.category == $cat) | . as $t |
+      ($notes | map(select(.key == $t.key)) | first // {}) as $note |
+      ($tasks | map(select(.key == $t.key)) | first // {}) as $task |
+      {
+        key: .key, url: .url,
+        title: (if (.title != "" and .title != null) then .title else ($note.title // .key) end),
+        vault_note: ($note.vault_note // null),
+        vault_alias: ($note.vault_alias // null),
+        task_note: ($task.task_note // null),
+        task_alias: ($task.task_alias // null),
+        last_post_summary: (.last_post_summary // null)
+      }]' "$WORK/threads.json"
+}
+
+NEEDS_RESPONSE=$(enrich_threads "needs_response")
+REVIEW_REQUESTS=$(enrich_threads "review_request")
+MY_PRS=$(enrich_threads "my_prs")
+FYI=$(enrich_threads "fyi")
+RESOLVED=$(echo "$STALE_TASKS" | jq '[.[] | select(.should_resolve == true) | {key: .key, github_state: .github_state}]')
+
+jq -n \
+  --argjson needs_response "$NEEDS_RESPONSE" \
+  --argjson review_requests "$REVIEW_REQUESTS" \
+  --argjson my_prs "$MY_PRS" \
+  --argjson fyi "$FYI" \
+  --argjson resolved "$RESOLVED" \
+  --argjson created "$CREATED_COUNT" \
+  --argjson updated "$UPDATED_COUNT" \
+  --argjson tasks_created "$TASKS_CREATED" \
+  --argjson auto_resolved "$AUTO_RESOLVED" \
+  --arg commit_msg "$COMMIT_MSG" \
+  '{
+    needs_response: $needs_response,
+    review_requests: $review_requests,
+    my_prs: $my_prs,
+    fyi: $fyi,
+    resolved: $resolved,
+    stats: {
+      created: $created,
+      updated: $updated,
+      tasks_created: $tasks_created,
+      auto_resolved: $auto_resolved,
+      commit_message: $commit_msg
+    }
+  }'

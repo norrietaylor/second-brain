@@ -1,9 +1,8 @@
 filters:
   and:
-    - 'type == "inbox"'
-    - 'source == "raindrop"'
-    - 'status == "unprocessed"'
-
+    - type == "inbox"
+    - source == "raindrop"
+    - status == "unprocessed"
 views:
   - type: table
     name: Raindrop Inbox

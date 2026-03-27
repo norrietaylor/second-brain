@@ -1,8 +1,7 @@
 filters:
   and:
-    - 'file.inFolder("04 Data")'
-    - 'file.mtime >= today()'
-
+    - file.inFolder("04 Data")
+    - file.mtime >= today()
 views:
   - type: table
     name: Modified Today

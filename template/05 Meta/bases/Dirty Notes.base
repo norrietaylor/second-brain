@@ -1,16 +1,14 @@
 filters:
   and:
-    - 'file.inFolder("04 Data")'
-    - 'type != "dailynote"'
-    - 'type != "inbox"'
-
+    - file.inFolder("04 Data")
+    - type != "dailynote"
+    - type != "inbox"
 formulas:
-  is_dirty: 'if(classified_at && modified, date(modified) > date(classified_at), false)'
-
+  is_dirty: if(classified_at && modified, date(modified) > date(classified_at), false)
 views:
   - type: table
     name: Dirty Notes
-    filters: 'formula.is_dirty'
+    filters: formula.is_dirty
     order:
       - file.name
       - type

@@ -1,8 +1,7 @@
 filters:
   and:
-    - 'type == "inbox"'
-    - 'status == "unprocessed"'
-
+    - type == "inbox"
+    - status == "unprocessed"
 views:
   - type: table
     name: Unprocessed

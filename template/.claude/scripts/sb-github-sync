@@ -56,18 +56,26 @@ if ! command -v gh &>/dev/null; then
 fi
 
 # ---- Step 1: Run discovery scripts ------------------------------------------
-# Run sequentially (they share GitHub API rate limits)
+# Run in parallel — each hits different GitHub API endpoints (search, notifications, pulls)
 
-echo "Running GitHub discovery..." >&2
+echo "Running GitHub discovery (parallel)..." >&2
 
-"$SKILL_DIR/gh_notifications.sh" 7d > "$TMPDIR/notifications_raw.txt" 2>/dev/null || true
-"$SKILL_DIR/gh_involved.sh" 7d --compact > "$TMPDIR/involved_raw.txt" 2>/dev/null || true
-"$SKILL_DIR/gh_my_prs.sh" --compact > "$TMPDIR/my_prs_raw.txt" 2>/dev/null || true
+"$SKILL_DIR/gh_notifications.sh" 7d > "$TMPDIR/notifications_raw.txt" 2>/dev/null &
+PID_NOTIF=$!
+"$SKILL_DIR/gh_involved.sh" 7d --compact > "$TMPDIR/involved_raw.txt" 2>/dev/null &
+PID_INVOLVED=$!
+"$SKILL_DIR/gh_my_prs.sh" --compact > "$TMPDIR/my_prs_raw.txt" 2>/dev/null &
+PID_MY_PRS=$!
 
-# Count items from each source
-NOTIF_COUNT=$(grep -cE '^[0-9]+' "$TMPDIR/notifications_raw.txt" 2>/dev/null || echo "0")
-INVOLVED_COUNT=$(wc -l < "$TMPDIR/involved_raw.txt" 2>/dev/null | tr -d ' ' || echo "0")
-MY_PRS_COUNT=$(wc -l < "$TMPDIR/my_prs_raw.txt" 2>/dev/null | tr -d ' ' || echo "0")
+wait $PID_NOTIF $PID_INVOLVED $PID_MY_PRS || true
+
+# Count items from each source (ensure clean integer values for jq --argjson)
+NOTIF_COUNT=$(grep -cE '^[0-9]+' "$TMPDIR/notifications_raw.txt" 2>/dev/null | tr -d '[:space:]' | grep -oE '^[0-9]+' || echo "0")
+INVOLVED_COUNT=$(wc -l < "$TMPDIR/involved_raw.txt" 2>/dev/null | tr -d '[:space:]' | grep -oE '^[0-9]+' || echo "0")
+MY_PRS_COUNT=$(wc -l < "$TMPDIR/my_prs_raw.txt" 2>/dev/null | tr -d '[:space:]' | grep -oE '^[0-9]+' || echo "0")
+NOTIF_COUNT="${NOTIF_COUNT:-0}"
+INVOLVED_COUNT="${INVOLVED_COUNT:-0}"
+MY_PRS_COUNT="${MY_PRS_COUNT:-0}"
 
 echo "  Notifications: $NOTIF_COUNT, Involved: $INVOLVED_COUNT, My PRs: $MY_PRS_COUNT" >&2
 
@@ -101,9 +109,15 @@ echo "Querying vault state..." >&2
   > "$TMPDIR/github_base.json" || echo "[]" > "$TMPDIR/github_base.json") &
 PID1=$!
 
-# Search for gh-task notes
-(obsidian "vault=${VAULT_NAME}" search "query=type: task" "path=04 Data" format=json 2>/dev/null \
-  > "$TMPDIR/task_search.json" || echo "[]" > "$TMPDIR/task_search.json") &
+# Find gh-task notes via filesystem (obsidian search doesn't support frontmatter queries)
+(find "${DATA_DIR}" -name "*-gh-task-*.md" -type f 2>/dev/null | while IFS= read -r f; do
+    rel="${f#$VAULT_PATH/}"
+    fname="$(basename "$f" .md)"
+    github_url=$(awk '/^---$/{fm++; next} fm==1 && /^github_url:/{gsub(/^github_url:[[:space:]]*/, ""); gsub(/"/, ""); print; exit}' "$f" || true)
+    status=$(awk '/^---$/{fm++; next} fm==1 && /^status:/{gsub(/^status:[[:space:]]*/, ""); gsub(/"/, ""); print; exit}' "$f" || true)
+    jq -n --arg path "$rel" --arg file "$fname" --arg github_url "$github_url" --arg status "$status" \
+      '{path: $path, file: $file, github_url: $github_url, status: $status}'
+  done | jq -s '.' > "$TMPDIR/task_search.json" 2>/dev/null || echo "[]" > "$TMPDIR/task_search.json") &
 PID2=$!
 
 wait $PID1 $PID2
@@ -134,20 +148,36 @@ mkdir -p "$(dirname "$AUDIT_LOG")"
 MARK_DONE_COUNT=0
 MARK_DONE_ERRORS=0
 
+# Write audit log entries first (sequential, fast — no network I/O)
 while IFS=$'\t' read -r thread_id repo type title url; do
   [ -z "$thread_id" ] && continue
-
-  # Log to audit file
   ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$ts" "$thread_id" "$repo" "$type" "$title" "$url" >> "$AUDIT_LOG"
+done < "$MARK_DONE_DATA"
 
-  # PATCH to mark as done
-  if gh api -X PATCH "/notifications/threads/$thread_id" --silent 2>/dev/null; then
+# Fire all PATCH requests in parallel
+while IFS=$'\t' read -r thread_id repo type title url; do
+  [ -z "$thread_id" ] && continue
+  (
+    if gh api -X PATCH "/notifications/threads/$thread_id" --silent 2>/dev/null; then
+      echo "ok" > "$TMPDIR/done_${thread_id}.txt"
+    else
+      echo "err" > "$TMPDIR/done_${thread_id}.txt"
+    fi
+  ) &
+done < "$MARK_DONE_DATA"
+
+wait
+
+# Tally results
+for f in "$TMPDIR"/done_*.txt; do
+  [ -f "$f" ] || continue
+  if [ "$(cat "$f")" = "ok" ]; then
     MARK_DONE_COUNT=$((MARK_DONE_COUNT + 1))
   else
     MARK_DONE_ERRORS=$((MARK_DONE_ERRORS + 1))
   fi
-done < "$MARK_DONE_DATA"
+done
 
 echo "  Marked done: $MARK_DONE_COUNT (errors: $MARK_DONE_ERRORS)" >&2
 

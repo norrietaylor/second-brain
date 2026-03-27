@@ -1,0 +1,365 @@
+#!/bin/bash
+# ============================================================================
+# sb-eod-scan — Gather all /eod data in one parallel pass
+# ============================================================================
+#
+# PURPOSE:
+#   Runs all data-gathering operations for /eod in parallel and outputs a
+#   single comprehensive JSON blob. Claude calls this once at the start and
+#   has everything it needs — no per-item obsidian reads during processing.
+#
+# OUTPUT (stdout):
+#   {
+#     "date": { today, year, month, dot_date, now_dt, is_after_midnight,
+#               is_sunday, is_last_day_of_month, is_last_day_of_year, day_of_week },
+#     "daily_note": { path, exists, content, has_day_summary },
+#     "yesterday_note": { path, exists, content, open_threads_section },
+#     "inbox_items": [{ path, filename, content }],
+#     "dirty_notes": [{ path, filename, type, classified_at, content }],
+#     "meetings_today": [{ path, filename, title, content, has_summary, has_log }],
+#     "inbox_log": { entries, has_entries },
+#     "raindrop_inbox_count": N,
+#     "config": { confidence_threshold, slack_denylist }
+#   }
+#
+# USAGE:
+#   SCAN=$(".claude/scripts/sb-eod-scan")
+#
+# DEPENDENCIES:
+#   - obsidian CLI (vault must be open), jq, python3
+#
+# EXIT CODES:
+#   0 — always (errors produce empty arrays / fallback values)
+# ============================================================================
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VAULT_PATH="$(cd "$SCRIPT_DIR/../.." && pwd)"
+DATA_DIR="$VAULT_PATH/04 Data"
+VAULT_NAME="${SECOND_BRAIN_NAME:-second-brain}"
+
+WORK=$(mktemp -d)
+trap "rm -rf $WORK" EXIT
+
+# Helper: strip obsidian loading line (matches timestamp prefix before JSON)
+strip_loading() {
+  awk 'BEGIN{f=0} /^\[/{f=1} f{print}'
+}
+
+# ---- Date context -----------------------------------------------------------
+
+CURRENT_HOUR=$(date "+%H")
+CURRENT_HOUR=$((10#$CURRENT_HOUR))  # force decimal
+
+if [ "$CURRENT_HOUR" -lt 3 ]; then
+  # After midnight — treat as previous calendar day
+  TODAY=$(date -v-1d "+%Y-%m-%d" 2>/dev/null || date -d "yesterday" "+%Y-%m-%d" 2>/dev/null || date "+%Y-%m-%d")
+  IS_AFTER_MIDNIGHT=true
+else
+  TODAY=$(date "+%Y-%m-%d")
+  IS_AFTER_MIDNIGHT=false
+fi
+
+YEAR="${TODAY:0:4}"
+MONTH="${TODAY:5:2}"
+DAY="${TODAY:8:2}"
+DOT_DATE="${YEAR}.${MONTH}.${DAY}"
+NOW_DT=$(date "+%Y-%m-%d %H:%M")
+
+# Day of week (1=Mon … 7=Sun, BSD date)
+DOW=$(date -j -f "%Y-%m-%d" "$TODAY" "+%u" 2>/dev/null || \
+      date -d "$TODAY" "+%u" 2>/dev/null || echo "5")
+IS_SUNDAY=$([ "$DOW" = "7" ] && echo true || echo false)
+
+# Last day of month: check if next day has a different month
+NEXT_DATE=$(date -j -v+1d -f "%Y-%m-%d" "$TODAY" "+%Y-%m-%d" 2>/dev/null || \
+            date -d "$TODAY + 1 day" "+%Y-%m-%d" 2>/dev/null || echo "")
+if [ -n "$NEXT_DATE" ] && [ "${NEXT_DATE:5:2}" != "$MONTH" ]; then
+  IS_LAST_DAY_OF_MONTH=true
+else
+  IS_LAST_DAY_OF_MONTH=false
+fi
+IS_LAST_DAY_OF_YEAR=$([ "$TODAY" = "${YEAR}-12-31" ] && echo true || echo false)
+
+case "$DOW" in
+  1) DAY_OF_WEEK="Monday" ;;
+  2) DAY_OF_WEEK="Tuesday" ;;
+  3) DAY_OF_WEEK="Wednesday" ;;
+  4) DAY_OF_WEEK="Thursday" ;;
+  5) DAY_OF_WEEK="Friday" ;;
+  6) DAY_OF_WEEK="Saturday" ;;
+  7) DAY_OF_WEEK="Sunday" ;;
+  *) DAY_OF_WEEK="Weekday" ;;
+esac
+
+DAILY_NOTE_PATH="04 Data/${YEAR}/${MONTH}/${DOT_DATE}-daily-note.md"
+DAILY_NOTE_FULL="${DATA_DIR}/${YEAR}/${MONTH}/${DOT_DATE}-daily-note.md"
+
+echo "sb-eod-scan: date=$TODAY, hour=$CURRENT_HOUR, after_midnight=$IS_AFTER_MIDNIGHT" >&2
+
+# ---- Parallel base queries --------------------------------------------------
+
+echo "Querying bases (parallel)..." >&2
+
+(obsidian "vault=${VAULT_NAME}" base:query 'path=05 Meta/bases/Unprocessed Inbox.base' \
+  format=json 2>/dev/null | strip_loading > "$WORK/inbox_base.json" \
+  || echo "[]" > "$WORK/inbox_base.json") &
+P1=$!
+
+(obsidian "vault=${VAULT_NAME}" base:query 'path=05 Meta/bases/Dirty Notes.base' \
+  format=json 2>/dev/null | strip_loading > "$WORK/dirty_base.json" \
+  || echo "[]" > "$WORK/dirty_base.json") &
+P2=$!
+
+(obsidian "vault=${VAULT_NAME}" base:query 'path=02 Areas/Meetings.base' 'view=Today' \
+  format=json 2>/dev/null | strip_loading > "$WORK/meetings_base.json" \
+  || echo "[]" > "$WORK/meetings_base.json") &
+P3=$!
+
+(obsidian "vault=${VAULT_NAME}" base:query 'path=05 Meta/bases/Raindrop Inbox.base' \
+  format=json 2>/dev/null | strip_loading > "$WORK/raindrop_base.json" \
+  || echo "[]" > "$WORK/raindrop_base.json") &
+P4=$!
+
+wait $P1 $P2 $P3 $P4
+
+# Validate JSON — fall back to [] on parse error
+for f in inbox_base dirty_base meetings_base raindrop_base; do
+  jq empty "$WORK/${f}.json" 2>/dev/null || echo "[]" > "$WORK/${f}.json"
+done
+
+RAINDROP_COUNT=$(jq 'length' "$WORK/raindrop_base.json" 2>/dev/null || echo "0")
+INBOX_COUNT=$(jq 'length' "$WORK/inbox_base.json" 2>/dev/null || echo "0")
+DIRTY_COUNT=$(jq 'length' "$WORK/dirty_base.json" 2>/dev/null || echo "0")
+MEETINGS_COUNT=$(jq 'length' "$WORK/meetings_base.json" 2>/dev/null || echo "0")
+
+echo "  Inbox: $INBOX_COUNT, Dirty: $DIRTY_COUNT, Meetings: $MEETINGS_COUNT, Raindrop: $RAINDROP_COUNT" >&2
+
+# ---- Read note contents (parallel per group) --------------------------------
+
+echo "Reading note contents (parallel)..." >&2
+
+# Inbox items — parallel reads
+IDX=0
+while IFS= read -r item; do
+  path=$(echo "$item" | jq -r '.path // ""')
+  [ -z "$path" ] || [ "$path" = "null" ] && continue
+  filename=$(basename "${path%.md}")
+  full_path="${VAULT_PATH}/${path}"
+  idx=$IDX
+  IDX=$((IDX + 1))
+  (
+    content=$(cat "$full_path" 2>/dev/null || echo "")
+    jq -nc --arg path "$path" --arg filename "$filename" --arg content "$content" \
+      '{path: $path, filename: $filename, content: $content}' > "$WORK/inbox_${idx}.json"
+  ) &
+done < <(jq -c '.[]' "$WORK/inbox_base.json" 2>/dev/null || true)
+wait
+_inbox_files=("$WORK"/inbox_*.json)
+if [ -e "${_inbox_files[0]}" ]; then
+  INBOX_ITEMS_JSON=$(cat "${_inbox_files[@]}" | jq -s '.' || echo '[]')
+else
+  INBOX_ITEMS_JSON='[]'
+fi
+
+# Dirty notes — parallel reads
+IDX=0
+while IFS= read -r item; do
+  path=$(echo "$item" | jq -r '.path // ""')
+  [ -z "$path" ] || [ "$path" = "null" ] && continue
+  filename=$(basename "${path%.md}")
+  type=$(echo "$item" | jq -r '.type // ""')
+  classified_at=$(echo "$item" | jq -r '.classified_at // ""')
+  full_path="${VAULT_PATH}/${path}"
+  idx=$IDX
+  IDX=$((IDX + 1))
+  (
+    content=$(cat "$full_path" 2>/dev/null || echo "")
+    jq -nc --arg path "$path" --arg filename "$filename" \
+      --arg type "$type" --arg classified_at "$classified_at" --arg content "$content" \
+      '{path: $path, filename: $filename, type: $type, classified_at: $classified_at, content: $content}' \
+      > "$WORK/dirty_${idx}.json"
+  ) &
+done < <(jq -c '.[]' "$WORK/dirty_base.json" 2>/dev/null || true)
+wait
+_dirty_files=("$WORK"/dirty_*.json)
+if [ -e "${_dirty_files[0]}" ]; then
+  DIRTY_NOTES_JSON=$(cat "${_dirty_files[@]}" | jq -s '.' || echo '[]')
+else
+  DIRTY_NOTES_JSON='[]'
+fi
+
+# Meetings today — parallel reads
+IDX=0
+while IFS= read -r item; do
+  path=$(echo "$item" | jq -r '.path // ""')
+  [ -z "$path" ] || [ "$path" = "null" ] && continue
+  filename=$(basename "${path%.md}")
+  # Try title from various frontmatter fields
+  title=$(echo "$item" | jq -r 'first(.title, .meeting_name, (.aliases[0] // empty), "") // ""')
+  full_path="${VAULT_PATH}/${path}"
+  idx=$IDX
+  IDX=$((IDX + 1))
+  (
+    content=$(cat "$full_path" 2>/dev/null || echo "")
+    has_summary=$(echo "$content" | grep -q "^## Summary" && echo true || echo false)
+    has_log=$(echo "$content" | grep -qE "^## (Log|Action Items)" && echo true || echo false)
+    jq -nc --arg path "$path" --arg filename "$filename" --arg title "$title" \
+      --arg content "$content" --argjson has_summary "$has_summary" \
+      --argjson has_log "$has_log" \
+      '{path: $path, filename: $filename, title: $title, content: $content,
+        has_summary: $has_summary, has_log: $has_log}' \
+      > "$WORK/meeting_${idx}.json"
+  ) &
+done < <(jq -c '.[]' "$WORK/meetings_base.json" 2>/dev/null || true)
+wait
+_meeting_files=("$WORK"/meeting_*.json)
+if [ -e "${_meeting_files[0]}" ]; then
+  MEETINGS_JSON=$(cat "${_meeting_files[@]}" | jq -s '.' || echo '[]')
+else
+  MEETINGS_JSON='[]'
+fi
+
+# ---- Read daily note --------------------------------------------------------
+
+DAILY_NOTE_EXISTS=false
+DAILY_NOTE_CONTENT=""
+DAILY_NOTE_HAS_DAY_SUMMARY=false
+
+if [ -f "$DAILY_NOTE_FULL" ]; then
+  DAILY_NOTE_EXISTS=true
+  DAILY_NOTE_CONTENT=$(cat "$DAILY_NOTE_FULL" 2>/dev/null || echo "")
+  echo "$DAILY_NOTE_CONTENT" | grep -q "^## Day Summary" && DAILY_NOTE_HAS_DAY_SUMMARY=true || true
+fi
+
+echo "  Daily note exists: $DAILY_NOTE_EXISTS, has day summary: $DAILY_NOTE_HAS_DAY_SUMMARY" >&2
+
+# ---- Find previous work day's daily note (back-scan, skip weekends/gaps) ----
+
+YESTERDAY_PATH=""
+YESTERDAY_EXISTS=false
+YESTERDAY_CONTENT=""
+YESTERDAY_OPEN_THREADS=""
+
+for i in 1 2 3 4 5 6 7; do
+  # BSD date (macOS)
+  CHECK_DATE=$(date -j -v-${i}d -f "%Y-%m-%d" "$TODAY" "+%Y-%m-%d" 2>/dev/null) || \
+  CHECK_DATE=$(date -d "$TODAY - $i days" "+%Y-%m-%d" 2>/dev/null) || break
+
+  CHECK_YEAR="${CHECK_DATE:0:4}"
+  CHECK_MONTH="${CHECK_DATE:5:2}"
+  CHECK_DAY="${CHECK_DATE:8:2}"
+  CHECK_DOT="${CHECK_YEAR}.${CHECK_MONTH}.${CHECK_DAY}"
+  CHECK_FULL="${DATA_DIR}/${CHECK_YEAR}/${CHECK_MONTH}/${CHECK_DOT}-daily-note.md"
+
+  if [ -f "$CHECK_FULL" ]; then
+    YESTERDAY_PATH="04 Data/${CHECK_YEAR}/${CHECK_MONTH}/${CHECK_DOT}-daily-note.md"
+    YESTERDAY_EXISTS=true
+    YESTERDAY_CONTENT=$(cat "$CHECK_FULL" 2>/dev/null || echo "")
+    # Extract Open Threads section (lines between ### Open Threads and next ###)
+    YESTERDAY_OPEN_THREADS=$(echo "$YESTERDAY_CONTENT" | \
+      awk '/^### Open Threads/{found=1; next} found && /^###/{found=0} found && /^[-⚠]/{print}' || true)
+    echo "  Previous work day: $CHECK_DATE (${YESTERDAY_PATH})" >&2
+    break
+  fi
+done
+
+# ---- Read config and inbox log ----------------------------------------------
+
+CONFIG_PATH="${VAULT_PATH}/05 Meta/config.yaml"
+INBOX_LOG_FULL="${VAULT_PATH}/05 Meta/logs/inbox-log.md"
+
+CONFIG_CONTENT=$(cat "$CONFIG_PATH" 2>/dev/null || echo "")
+INBOX_LOG_CONTENT=$(cat "$INBOX_LOG_FULL" 2>/dev/null || echo "")
+
+# Entries = everything after the 2-line header
+INBOX_LOG_ENTRIES=$(echo "$INBOX_LOG_CONTENT" | awk 'NR>2 && NF' || true)
+INBOX_LOG_HAS_ENTRIES=$([ -n "$INBOX_LOG_ENTRIES" ] && echo true || echo false)
+
+# Parse confidence threshold
+CONFIDENCE_THRESHOLD=$(echo "$CONFIG_CONTENT" | \
+  grep -E "^\s+threshold:" | awk '{print $2}' | head -1 || echo "0.6")
+CONFIDENCE_THRESHOLD="${CONFIDENCE_THRESHOLD:-0.6}"
+
+# Parse slack denylist via python3
+SLACK_DENYLIST=$(python3 - <<PYEOF 2>/dev/null || echo "[]"
+import sys, yaml, json
+try:
+    with open("$CONFIG_PATH") as f:
+        cfg = yaml.safe_load(f) or {}
+    dl = cfg.get("slack", {}).get("denylist", [])
+    print(json.dumps(dl))
+except Exception:
+    print("[]")
+PYEOF
+)
+
+echo "  Config threshold: $CONFIDENCE_THRESHOLD" >&2
+echo "  Inbox log entries: $INBOX_LOG_HAS_ENTRIES" >&2
+
+# ---- Build output JSON ------------------------------------------------------
+
+echo "Building output JSON..." >&2
+
+jq -n \
+  --arg today "$TODAY" \
+  --arg year "$YEAR" \
+  --arg month "$MONTH" \
+  --arg dot_date "$DOT_DATE" \
+  --arg now_dt "$NOW_DT" \
+  --argjson is_after_midnight "$IS_AFTER_MIDNIGHT" \
+  --argjson is_sunday "$IS_SUNDAY" \
+  --argjson is_last_day_of_month "$IS_LAST_DAY_OF_MONTH" \
+  --argjson is_last_day_of_year "$IS_LAST_DAY_OF_YEAR" \
+  --arg day_of_week "$DAY_OF_WEEK" \
+  --arg daily_note_path "$DAILY_NOTE_PATH" \
+  --argjson daily_note_exists "$DAILY_NOTE_EXISTS" \
+  --arg daily_note_content "$DAILY_NOTE_CONTENT" \
+  --argjson daily_note_has_day_summary "$DAILY_NOTE_HAS_DAY_SUMMARY" \
+  --arg yesterday_path "$YESTERDAY_PATH" \
+  --argjson yesterday_exists "$YESTERDAY_EXISTS" \
+  --arg yesterday_content "$YESTERDAY_CONTENT" \
+  --arg yesterday_open_threads "$YESTERDAY_OPEN_THREADS" \
+  --argjson inbox_items "$INBOX_ITEMS_JSON" \
+  --argjson dirty_notes "$DIRTY_NOTES_JSON" \
+  --argjson meetings_today "$MEETINGS_JSON" \
+  --arg inbox_log_entries "$INBOX_LOG_ENTRIES" \
+  --argjson inbox_log_has_entries "$INBOX_LOG_HAS_ENTRIES" \
+  --argjson raindrop_inbox_count "${RAINDROP_COUNT:-0}" \
+  --arg confidence_threshold "$CONFIDENCE_THRESHOLD" \
+  --argjson slack_denylist "$SLACK_DENYLIST" \
+  '{
+    date: {
+      today: $today, year: $year, month: $month, dot_date: $dot_date,
+      now_dt: $now_dt, is_after_midnight: $is_after_midnight,
+      is_sunday: $is_sunday, is_last_day_of_month: $is_last_day_of_month,
+      is_last_day_of_year: $is_last_day_of_year, day_of_week: $day_of_week
+    },
+    daily_note: {
+      path: $daily_note_path,
+      exists: $daily_note_exists,
+      content: $daily_note_content,
+      has_day_summary: $daily_note_has_day_summary
+    },
+    yesterday_note: {
+      path: $yesterday_path,
+      exists: $yesterday_exists,
+      content: $yesterday_content,
+      open_threads_section: $yesterday_open_threads
+    },
+    inbox_items: $inbox_items,
+    dirty_notes: $dirty_notes,
+    meetings_today: $meetings_today,
+    inbox_log: {
+      entries: $inbox_log_entries,
+      has_entries: $inbox_log_has_entries
+    },
+    raindrop_inbox_count: $raindrop_inbox_count,
+    config: {
+      confidence_threshold: ($confidence_threshold | tonumber),
+      slack_denylist: $slack_denylist
+    }
+  }'
+
+echo "sb-eod-scan complete." >&2

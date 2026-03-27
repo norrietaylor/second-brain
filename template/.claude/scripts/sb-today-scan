@@ -188,7 +188,8 @@ fi
 # ---- Step 1.5: Ingest -------------------------------------------------------
 
 INGEST_OUTPUT=$("$SCRIPT_DIR/sb-ingest" 2>&1 || true)
-INGEST_COUNT=$(echo "$INGEST_OUTPUT" | grep -c "Imported:" 2>/dev/null || echo "0")
+INGEST_COUNT=$(echo "$INGEST_OUTPUT" | grep -c "Imported:" 2>/dev/null | tr -d '[:space:]' || echo "0")
+INGEST_COUNT="${INGEST_COUNT:-0}"
 
 # ---- Step 2a: Find yesterday + extract Tomorrow section ---------------------
 
