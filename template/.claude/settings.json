@@ -36,7 +36,9 @@
         ".",
         "~/{{VAULT_NAME}}-inbox",
         "~/.config/gh",
-        "~/.config/glab"
+        "~/.config/glab",
+        "/Applications/Obsidian.app",
+        "~/Library/Application Support/obsidian"
       ],
       "denyWrite": [
         "~/"

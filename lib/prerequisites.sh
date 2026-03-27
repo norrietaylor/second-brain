@@ -12,9 +12,7 @@ source "${SCRIPT_DIR}/common.sh"
 
 check_obsidian_cli() {
   if command -v obsidian &>/dev/null; then
-    local version
-    version=$(obsidian --version 2>/dev/null || echo "unknown")
-    log_success "Obsidian CLI: ${version}"
+    log_success "Obsidian CLI: found ($(command -v obsidian))"
     return 0
   else
     log_error "Obsidian CLI: not found"

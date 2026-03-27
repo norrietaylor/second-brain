@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+# sb-verify — Post-install health check for Second Brain vault
+# Reads .sb-installer.json to determine which integrations are enabled,
+# then validates prerequisites, scripts, directories, auth, and Obsidian access.
+
+set -uo pipefail
+
+# ── Colors ───────────────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
+DIM='\033[2m'
+RESET='\033[0m'
+
+pass()  { echo -e "${GREEN}✓${RESET}  $*"; }
+fail()  { echo -e "${RED}✗${RESET}  $*"; }
+warn()  { echo -e "${YELLOW}⚠${RESET}  $*"; }
+info()  { echo -e "${BLUE}ℹ${RESET}  $*"; }
+header(){ echo -e "\n${BOLD}$*${RESET}"; }
+
+FAILURES=0
+FIXES=()
+
+# ── Step 0: Read installer metadata ─────────────────────────────────
+META_FILE=".sb-installer.json"
+if [[ -f "$META_FILE" ]]; then
+  INTEGRATIONS=$(python3 -c "import sys,json; print(json.load(open('$META_FILE')).get('integrations',''))" 2>/dev/null || echo "")
+  VAULT_NAME=$(python3 -c "import sys,json; print(json.load(open('$META_FILE')).get('vault_name',''))" 2>/dev/null || echo "")
+else
+  warn "No .sb-installer.json found — assuming all integrations enabled"
+  INTEGRATIONS="GitHub,GitLab,Slack,Granola,Git-backed"
+  VAULT_NAME=""
+fi
+
+has_integration() { echo "$INTEGRATIONS" | grep -qi "$1"; }
+
+# Derive vault name from VAULT_NAME or directory name
+if [[ -z "$VAULT_NAME" ]]; then
+  VAULT_NAME=$(basename "$(pwd)")
+fi
+
+# ── Step 1: Obsidian Vault Access ────────────────────────────────────
+header "Obsidian Vault Access"
+
+obsidian_output=$(obsidian "vault=${VAULT_NAME}" search query="type" path="05 Meta/claude" format=json 2>/dev/null | cat)
+if [[ -n "$obsidian_output" ]] && echo "$obsidian_output" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null; then
+  schema_count=$(echo "$obsidian_output" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "?")
+  pass "Obsidian CLI connected — ${schema_count} type schemas found"
+else
+  fail "Obsidian CLI could not reach vault '${VAULT_NAME}'"
+  FIXES+=("Ensure Obsidian is running with the vault open")
+  FIXES+=("The vault must be registered in Obsidian (Open folder as vault)")
+  ((FAILURES++))
+fi
+
+# ── Step 2: Bases Views ──────────────────────────────────────────────
+header "Bases Views"
+
+bases_ok=0
+bases_total=0
+for base in "02 Areas/Tasks.base" "02 Areas/Today.base"; do
+  ((bases_total++))
+  base_output=$(obsidian "vault=${VAULT_NAME}" base:query path="$base" format=json 2>/dev/null | cat)
+  if [[ $? -eq 0 ]] && [[ -n "$base_output" || "$base_output" == "[]" ]]; then
+    pass "$base"
+    ((bases_ok++))
+  else
+    fail "$base — not responding"
+    ((FAILURES++))
+  fi
+done
+info "Bases: ${bases_ok}/${bases_total} responding"
+
+# ── Step 3: Prerequisites ────────────────────────────────────────────
+header "Prerequisites"
+
+check_tool() {
+  local name="$1" cmd="$2" required="$3" version_cmd="${4:-}"
+  if command -v "$cmd" &>/dev/null; then
+    if [[ -n "$version_cmd" ]]; then
+      local ver
+      ver=$($version_cmd 2>/dev/null | head -1 || echo "unknown")
+      pass "${name}: ${ver}"
+    else
+      pass "${name}: found ($(command -v "$cmd"))"
+    fi
+  else
+    if [[ "$required" == "yes" ]]; then
+      fail "${name}: not found"
+      ((FAILURES++))
+    else
+      warn "${name}: not found (optional)"
+    fi
+  fi
+}
+
+check_tool "Obsidian CLI" "obsidian" "yes" ""
+check_tool "jq" "jq" "yes" "jq --version"
+check_tool "Python 3" "python3" "yes" "python3 --version"
+
+if has_integration "GitHub"; then
+  check_tool "GitHub CLI" "gh" "yes" "gh --version"
+fi
+if has_integration "GitLab"; then
+  check_tool "GitLab CLI" "glab" "yes" "glab --version"
+fi
+
+# ── Step 4: Authentication ───────────────────────────────────────────
+header "Authentication"
+
+if has_integration "GitHub"; then
+  if gh auth status &>/dev/null; then
+    pass "GitHub CLI: authenticated"
+  else
+    fail "GitHub CLI: not authenticated"
+    FIXES+=("Run: gh auth login")
+    ((FAILURES++))
+  fi
+fi
+
+if has_integration "GitLab"; then
+  if glab auth status &>/dev/null; then
+    pass "GitLab CLI: authenticated"
+  else
+    fail "GitLab CLI: not authenticated"
+    FIXES+=("Run: glab auth login")
+    ((FAILURES++))
+  fi
+fi
+
+if has_integration "Slack"; then
+  if [[ -n "${SLACK_USER_TOKEN:-}" ]]; then
+    pass "Slack: SLACK_USER_TOKEN set"
+  else
+    warn "Slack: SLACK_USER_TOKEN not set (MCP fallback will be used)"
+  fi
+fi
+
+# ── Step 5: Scripts ──────────────────────────────────────────────────
+header "Scripts"
+
+check_script() {
+  local path="$1"
+  if [[ ! -f "$path" ]]; then
+    fail "${path}: not found"
+    ((FAILURES++))
+    return
+  fi
+  if [[ -x "$path" ]]; then
+    pass "${path}"
+  else
+    chmod +x "$path"
+    pass "${path} (fixed permissions)"
+  fi
+}
+
+check_script "05 Meta/scripts/sb-ingest"
+check_script "05 Meta/scripts/calculate_dates.py"
+check_script "05 Meta/scripts/sb-verify"
+
+if has_integration "GitHub"; then
+  check_script "05 Meta/scripts/gh-fetch"
+fi
+if has_integration "Slack"; then
+  check_script "05 Meta/scripts/slack-my-activity"
+fi
+if has_integration "Granola"; then
+  check_script "05 Meta/scripts/granola-ingest"
+fi
+
+# ── Step 6: Directories ─────────────────────────────────────────────
+header "Directories"
+
+check_dir() {
+  local path="$1"
+  if [[ -d "$path" ]]; then
+    pass "$path"
+  else
+    mkdir -p "$path"
+    pass "$path (created)"
+  fi
+}
+
+check_dir "04 Data"
+check_dir "05 Meta/context"
+check_dir "05 Meta/logs"
+check_dir "03 Resources"
+
+# Inbox folder
+inbox_dir="${HOME}/${VAULT_NAME}-inbox"
+if [[ -d "$inbox_dir" ]]; then
+  pass "${inbox_dir}"
+else
+  warn "${inbox_dir}: not found"
+  FIXES+=("Create inbox folder: mkdir -p '${inbox_dir}'")
+fi
+
+# ── Step 7: Obsidian Plugins ─────────────────────────────────────────
+header "Obsidian Plugins (manual verification)"
+
+echo -e "${DIM}  These must be configured in the Obsidian UI:${RESET}"
+echo "  • Bases — enable in Settings > Core Plugins"
+echo "  • Templater by SilentVoid — template folder: 05 Meta/templates"
+echo "  • Update frontmatter modified date — format: YYYY-MM-DD HH:mm, exclude: 05 Meta"
+if has_integration "Granola"; then
+  echo "  • Granola Sync by philfreo — see CLAUDE.md for setup"
+fi
+
+# ── Summary ──────────────────────────────────────────────────────────
+echo ""
+echo -e "${BOLD}────────────────────────────────${RESET}"
+if [[ $FAILURES -eq 0 ]]; then
+  echo -e "${GREEN}${BOLD}All checks passed.${RESET} Run /today to start."
+else
+  echo -e "${RED}${BOLD}${FAILURES} issue(s) found.${RESET}"
+  if [[ ${#FIXES[@]} -gt 0 ]]; then
+    echo ""
+    echo -e "${BOLD}Fixes:${RESET}"
+    for fix in "${FIXES[@]}"; do
+      echo "  → ${fix}"
+    done
+  fi
+fi
+echo -e "${BOLD}────────────────────────────────${RESET}"
+
+exit $FAILURES

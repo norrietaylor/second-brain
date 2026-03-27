@@ -194,7 +194,7 @@ configure_sandbox() {
   fi
 
   # Build allowRead array
-  local read_paths='".", "~/'"${vault_name}"'-inbox"'
+  local read_paths='".", "~/'"${vault_name}"'-inbox", "/Applications/Obsidian.app", "~/Library/Application Support/obsidian"'
   if echo "$integrations" | grep -q "GitHub"; then
     read_paths="${read_paths}, \"~/.config/gh\""
   fi
