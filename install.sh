@@ -86,6 +86,20 @@ if [[ "$UPDATE_MODE" == true ]]; then
 
   log_info "Vault: ${vault_name} (v${old_version} → v${INSTALLER_VERSION})"
   log_info "Path: ${UPDATE_PATH}"
+
+  # If integrations field is empty, prompt the user to select
+  if [[ -z "$integrations" ]]; then
+    log_warn "No integrations recorded — please select which are enabled:"
+    integrations_raw=$(prompt_multi_select \
+      "Which integrations are enabled in this vault?" \
+      "GitHub sync (gh CLI)" \
+      "GitLab sync (glab CLI)" \
+      "Slack activity tracking" \
+      "Granola meeting sync" \
+      "Git-backed vault")
+    integrations=$(echo "$integrations_raw" | tr '\n' ',' | sed 's/,$//')
+  fi
+
   log_info "Integrations: ${integrations}"
 
   # Set template variables
@@ -143,6 +157,9 @@ if [[ "$UPDATE_MODE" == true ]]; then
     log_step "Copying updated template files..."
     copy_template_tree "${INSTALLER_DIR}/template" "$UPDATE_PATH" "$integrations"
   fi
+
+  # Regenerate sandbox + permissions for current integrations
+  configure_settings "$UPDATE_PATH" "$integrations" "$vault_name"
 
   # Update metadata
   write_installer_meta "$UPDATE_PATH" "$vault_name" "$integrations"

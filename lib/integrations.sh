@@ -180,41 +180,14 @@ EOF
   log_success "Generated config.yaml"
 }
 
-# ── Sandbox configuration ────────────────────────────────────────────
-# Tailor the sandbox in settings.json based on selected integrations.
+# ── Settings configuration ────────────────────────────────────────────
+# Tailor permissions in settings.json based on selected integrations.
 
-configure_sandbox() {
+configure_settings() {
   local vault_dir="$1"
   local integrations="$2"
   local vault_name="$3"
   local settings_file="${vault_dir}/.claude/settings.json"
-
-  if [[ ! -f "$settings_file" ]]; then
-    return 0
-  fi
-
-  # Build allowRead array
-  local read_paths='".", "~/'"${vault_name}"'-inbox", "/Applications/Obsidian.app", "~/Library/Application Support/obsidian"'
-  if echo "$integrations" | grep -q "GitHub"; then
-    read_paths="${read_paths}, \"~/.config/gh\""
-  fi
-  if echo "$integrations" | grep -q "GitLab"; then
-    read_paths="${read_paths}, \"~/.config/glab\""
-  fi
-
-  # Build allowedDomains array
-  local domains=""
-  if echo "$integrations" | grep -q "GitHub"; then
-    domains="${domains}\"api.github.com\", \"github.com\", "
-  fi
-  if echo "$integrations" | grep -q "GitLab"; then
-    domains="${domains}\"*.gitlab.com\", "
-  fi
-  if echo "$integrations" | grep -q "Slack"; then
-    domains="${domains}\"slack.com\", \"*.slack.com\", "
-  fi
-  # Strip trailing comma+space
-  domains="${domains%, }"
 
   # Build permission allow list (only include integration-specific entries)
   local -a allow_perms=(
@@ -249,6 +222,22 @@ configure_sandbox() {
   fi
   allow_perms+=('"Bash(*05 Meta/scripts/sync-memory.sh*)"')
 
+  # Utility commands (read-only / safe)
+  allow_perms+=(
+    '"Bash(ls *)"'
+    '"Bash(cat *)"'
+    '"Bash(mkdir -p *)"'
+    '"Bash(chmod +x *)"'
+    '"Bash(command -v *)"'
+    '"Bash(jq *)"'
+  )
+  if echo "$integrations" | grep -q "GitHub"; then
+    allow_perms+=('"Bash(gh *)"')
+  fi
+  if echo "$integrations" | grep -q "GitLab"; then
+    allow_perms+=('"Bash(glab *)"')
+  fi
+
   # Join allow_perms with newlines
   local allow_json=""
   for i in "${!allow_perms[@]}"; do
@@ -271,27 +260,6 @@ ${allow_json}    ],
       "Bash(rm -rf*)"
     ]
   },
-  "sandbox": {
-    "enabled": true,
-    "mode": "auto-allow",
-    "filesystem": {
-      "allowWrite": [
-        ".",
-        "~/${vault_name}-inbox"
-      ],
-      "allowRead": [
-        ${read_paths}
-      ],
-      "denyWrite": [
-        "~/"
-      ]
-    },
-    "network": {
-      "allowedDomains": [
-        ${domains}
-      ]
-    }
-  },
   "hooks": {
     "SessionStart": [
       {
@@ -307,7 +275,7 @@ ${allow_json}    ],
 }
 EOF
 
-  log_success "Configured sandbox (write: vault + inbox, network: ${domains:-none})"
+  log_success "Configured permissions for selected integrations"
 }
 
 # ── Run all selected integration setups ──────────────────────────────
@@ -336,7 +304,7 @@ run_integration_setup() {
   generate_config "$vault_dir" "$integrations"
 
   # Tailor sandbox + permissions to selected integrations
-  configure_sandbox "$vault_dir" "$integrations" "$TPL_VAULT_NAME"
+  configure_settings "$vault_dir" "$integrations" "$TPL_VAULT_NAME"
 
   # Git must be last (it commits the initial state)
   if echo "$integrations" | grep -q "Git-backed"; then

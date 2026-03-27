@@ -16,43 +16,21 @@
       "Bash(*gl-onmyplate/scripts/*)",
       "Bash(*05 Meta/scripts/granola-ingest*)",
       "Bash(*05 Meta/scripts/granola-initial-sync*)",
-      "Bash(*05 Meta/scripts/slack-my-activity*)"
+      "Bash(*05 Meta/scripts/slack-my-activity*)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(mkdir -p *)",
+      "Bash(chmod +x *)",
+      "Bash(command -v *)",
+      "Bash(jq *)",
+      "Bash(gh *)",
+      "Bash(glab *)"
     ],
     "deny": [
       "Bash(git push*)",
       "Bash(git reset*)",
       "Bash(rm -rf*)"
     ]
-  },
-  "sandbox": {
-    "enabled": true,
-    "mode": "auto-allow",
-    "filesystem": {
-      "allowWrite": [
-        ".",
-        "~/{{VAULT_NAME}}-inbox"
-      ],
-      "allowRead": [
-        ".",
-        "~/{{VAULT_NAME}}-inbox",
-        "~/.config/gh",
-        "~/.config/glab",
-        "/Applications/Obsidian.app",
-        "~/Library/Application Support/obsidian"
-      ],
-      "denyWrite": [
-        "~/"
-      ]
-    },
-    "network": {
-      "allowedDomains": [
-        "api.github.com",
-        "github.com",
-        "*.gitlab.com",
-        "slack.com",
-        "*.slack.com"
-      ]
-    }
   },
   "hooks": {
     "SessionStart": [
