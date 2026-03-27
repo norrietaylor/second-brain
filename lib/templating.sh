@@ -111,6 +111,9 @@ copy_template_tree() {
   if ! echo "$integrations" | grep -q "Granola"; then
     excludes+=("*granola*" "*Granola*")
   fi
+  if ! echo "$integrations" | grep -q "Raindrop"; then
+    excludes+=("*Raindrop*")
+  fi
 
   # Walk the template tree
   while IFS= read -r -d '' src; do

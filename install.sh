@@ -96,6 +96,7 @@ if [[ "$UPDATE_MODE" == true ]]; then
       "GitLab sync (glab CLI)" \
       "Slack activity tracking" \
       "Granola meeting sync" \
+      "Raindrop bookmarks (Make It Rain plugin)" \
       "Git-backed vault")
     integrations=$(echo "$integrations_raw" | tr '\n' ',' | sed 's/,$//')
   fi
@@ -222,6 +223,7 @@ integrations_raw=$(prompt_multi_select \
   "GitLab sync (glab CLI)" \
   "Slack activity tracking" \
   "Granola meeting sync" \
+  "Raindrop bookmarks (Make It Rain plugin)" \
   "Git-backed vault")
 
 # Normalize to comma-separated
