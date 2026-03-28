@@ -1,0 +1,301 @@
+#!/bin/bash
+# ============================================================================
+# sb-github-sync — GitHub discovery, categorization, and batch mark-done
+# ============================================================================
+#
+# PURPOSE:
+#   Handles the mechanical parts of /today Step 2.5:
+#   - Runs all 3 gh-onmyplate discovery scripts
+#   - Queries GitHub.base for existing vault notes
+#   - Searches for existing gh-task notes
+#   - Marks ALL notifications as done (batched)
+#   - Finds stale gh-task notes and checks their GitHub state
+#   - Outputs structured JSON for Claude to process
+#
+#   Claude then handles: gh-fetch for threads needing updates, AI summaries,
+#   vault note creation/update, task note creation, briefing composition.
+#
+# OUTPUT:
+#   JSON object on stdout with discovery results, vault state, and sync stats.
+#
+# USAGE:
+#   sb-github-sync
+#
+# DEPENDENCIES:
+#   - gh CLI (authenticated)
+#   - jq
+#   - gh-onmyplate scripts (~/.claude/skills/gh-onmyplate/scripts/)
+#   - obsidian CLI (vault must be open)
+#
+# EXIT CODES:
+#   0 — success (JSON output on stdout)
+#   1 — fatal error (missing dependencies)
+# ============================================================================
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VAULT_PATH="$(cd "$SCRIPT_DIR/../.." && pwd)"
+DATA_DIR="$VAULT_PATH/04 Data"
+VAULT_NAME="${SECOND_BRAIN_NAME:-{{VAULT_NAME}}}"
+SKILL_DIR="$HOME/.claude/skills/gh-onmyplate/scripts"
+
+TMPDIR=$(mktemp -d)
+trap "rm -rf $TMPDIR" EXIT
+
+# ---- Validate dependencies --------------------------------------------------
+
+if [ ! -d "$SKILL_DIR" ]; then
+  echo '{"error":"gh-onmyplate scripts not found","skill_dir":"'"$SKILL_DIR"'"}' >&2
+  exit 1
+fi
+
+if ! command -v gh &>/dev/null; then
+  echo '{"error":"gh CLI not installed"}' >&2
+  exit 1
+fi
+
+# ---- Step 1: Run discovery scripts ------------------------------------------
+# Run in parallel — each hits different GitHub API endpoints (search, notifications, pulls)
+
+echo "Running GitHub discovery (parallel)..." >&2
+
+"$SKILL_DIR/gh_notifications.sh" 7d > "$TMPDIR/notifications_raw.txt" 2>/dev/null &
+PID_NOTIF=$!
+"$SKILL_DIR/gh_involved.sh" 7d --compact > "$TMPDIR/involved_raw.txt" 2>/dev/null &
+PID_INVOLVED=$!
+"$SKILL_DIR/gh_my_prs.sh" --compact > "$TMPDIR/my_prs_raw.txt" 2>/dev/null &
+PID_MY_PRS=$!
+
+wait $PID_NOTIF $PID_INVOLVED $PID_MY_PRS || true
+
+# Count items from each source (ensure clean integer values for jq --argjson)
+NOTIF_COUNT=$(grep -cE '^[0-9]+' "$TMPDIR/notifications_raw.txt" 2>/dev/null | tr -d '[:space:]' | grep -oE '^[0-9]+' || echo "0")
+INVOLVED_COUNT=$(wc -l < "$TMPDIR/involved_raw.txt" 2>/dev/null | tr -d '[:space:]' | grep -oE '^[0-9]+' || echo "0")
+MY_PRS_COUNT=$(wc -l < "$TMPDIR/my_prs_raw.txt" 2>/dev/null | tr -d '[:space:]' | grep -oE '^[0-9]+' || echo "0")
+NOTIF_COUNT="${NOTIF_COUNT:-0}"
+INVOLVED_COUNT="${INVOLVED_COUNT:-0}"
+MY_PRS_COUNT="${MY_PRS_COUNT:-0}"
+
+echo "  Notifications: $NOTIF_COUNT, Involved: $INVOLVED_COUNT, My PRs: $MY_PRS_COUNT" >&2
+
+# ---- Step 2: Parse notifications for mark-done ------------------------------
+# Full format: THREAD_ID  REPO  TYPE  REASON  STATUS  UPDATED  TITLE  URL
+# Extract fields using awk (column -t aligned output, but fields are parseable)
+
+MARK_DONE_DATA="$TMPDIR/mark_done.tsv"
+: > "$MARK_DONE_DATA"
+
+grep -E '^[0-9]+' "$TMPDIR/notifications_raw.txt" 2>/dev/null | awk '{
+  thread_id = $1
+  repo = $2
+  type = $3
+  reason = $4
+  url = $NF
+  # Title is everything between field 6 (UPDATED) and the last field (URL)
+  title = ""
+  for (i = 7; i < NF; i++) title = title (i > 7 ? " " : "") $i
+  printf "%s\t%s\t%s\t%s\t%s\n", thread_id, repo, type, title, url
+}' > "$MARK_DONE_DATA" || true
+
+MARK_DONE_TOTAL=$(wc -l < "$MARK_DONE_DATA" | tr -d ' ')
+
+# ---- Step 3: Query GitHub.base and task notes --------------------------------
+
+echo "Querying vault state..." >&2
+
+# GitHub.base — existing vault notes
+(obsidian "vault=${VAULT_NAME}" base:query "path=02 Areas/GitHub.base" format=json 2>/dev/null \
+  > "$TMPDIR/github_base.json" || echo "[]" > "$TMPDIR/github_base.json") &
+PID1=$!
+
+# Find gh-task notes via filesystem (obsidian search doesn't support frontmatter queries)
+(find "${DATA_DIR}" -name "*-gh-task-*.md" -type f 2>/dev/null | while IFS= read -r f; do
+    rel="${f#$VAULT_PATH/}"
+    fname="$(basename "$f" .md)"
+    github_url=$(awk '/^---$/{fm++; next} fm==1 && /^github_url:/{gsub(/^github_url:[[:space:]]*/, ""); gsub(/"/, ""); print; exit}' "$f" || true)
+    status=$(awk '/^---$/{fm++; next} fm==1 && /^status:/{gsub(/^status:[[:space:]]*/, ""); gsub(/"/, ""); print; exit}' "$f" || true)
+    jq -n --arg path "$rel" --arg file "$fname" --arg github_url "$github_url" --arg status "$status" \
+      '{path: $path, file: $file, github_url: $github_url, status: $status}'
+  done | jq -s '.' > "$TMPDIR/task_search.json" 2>/dev/null || echo "[]" > "$TMPDIR/task_search.json") &
+PID2=$!
+
+wait $PID1 $PID2
+
+# Validate JSON
+for f in github_base task_search; do
+  FILE="$TMPDIR/${f}.json"
+  if ! jq empty "$FILE" 2>/dev/null; then
+    if awk '/^\[/{found=1} found{print}' "$FILE" | jq empty 2>/dev/null; then
+      awk '/^\[/{found=1} found{print}' "$FILE" > "${FILE}.clean"
+      mv "${FILE}.clean" "$FILE"
+    else
+      echo "[]" > "$FILE"
+    fi
+  fi
+done
+
+# ---- Step 4: Batch mark-done ------------------------------------------------
+# Inline the mark-done logic for efficiency (avoids 100+ subprocess spawns)
+
+echo "Marking $MARK_DONE_TOTAL notifications as done..." >&2
+
+# Source config for audit log path
+[ -f "$SKILL_DIR/config.sh" ] && source "$SKILL_DIR/config.sh"
+AUDIT_LOG="${MARKED_DONE_AUDIT_LOG:-$HOME/.local/share/gh-onmyplate/marked-done.tsv}"
+mkdir -p "$(dirname "$AUDIT_LOG")"
+
+MARK_DONE_COUNT=0
+MARK_DONE_ERRORS=0
+
+# Write audit log entries first (sequential, fast — no network I/O)
+while IFS=$'\t' read -r thread_id repo type title url; do
+  [ -z "$thread_id" ] && continue
+  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$ts" "$thread_id" "$repo" "$type" "$title" "$url" >> "$AUDIT_LOG"
+done < "$MARK_DONE_DATA"
+
+# Fire all PATCH requests in parallel
+while IFS=$'\t' read -r thread_id repo type title url; do
+  [ -z "$thread_id" ] && continue
+  (
+    if gh api -X PATCH "/notifications/threads/$thread_id" --silent 2>/dev/null; then
+      echo "ok" > "$TMPDIR/done_${thread_id}.txt"
+    else
+      echo "err" > "$TMPDIR/done_${thread_id}.txt"
+    fi
+  ) &
+done < "$MARK_DONE_DATA"
+
+wait
+
+# Tally results
+for f in "$TMPDIR"/done_*.txt; do
+  [ -f "$f" ] || continue
+  if [ "$(cat "$f")" = "ok" ]; then
+    MARK_DONE_COUNT=$((MARK_DONE_COUNT + 1))
+  else
+    MARK_DONE_ERRORS=$((MARK_DONE_ERRORS + 1))
+  fi
+done
+
+echo "  Marked done: $MARK_DONE_COUNT (errors: $MARK_DONE_ERRORS)" >&2
+
+# ---- Step 5: Find stale gh-task notes ---------------------------------------
+# Pending task notes whose threads may no longer be active
+
+echo "Checking for stale task notes..." >&2
+
+STALE_TASKS="[]"
+STALE_ENTRIES=()
+
+# Find all pending gh-task files
+while IFS= read -r -d '' task_file; do
+  # Quick frontmatter extraction (avoid obsidian CLI per file)
+  status=$(awk '/^---$/{fm++; next} fm==1 && /^status:/{print $2; exit}' "$task_file" | tr -d '"' || true)
+  github_url=$(awk '/^---$/{fm++; next} fm==1 && /^github_url:/{print $2; exit}' "$task_file" | tr -d '"' || true)
+
+  if [ "$status" = "pending" ] && [ -n "$github_url" ]; then
+    # Extract owner/repo and number from URL
+    if [[ "$github_url" =~ github\.com/([^/]+/[^/]+)/(issues|pull)/([0-9]+) ]]; then
+      owner_repo="${BASH_REMATCH[1]}"
+      number="${BASH_REMATCH[3]}"
+
+      # Check if this thread appears in today's discovery output
+      key="${owner_repo}#${number}"
+      in_discovery=false
+      if grep -q "$key" "$TMPDIR/notifications_raw.txt" "$TMPDIR/involved_raw.txt" "$TMPDIR/my_prs_raw.txt" 2>/dev/null; then
+        in_discovery=true
+      fi
+
+      if [ "$in_discovery" = false ]; then
+        # Thread not in discovery — check GitHub state
+        gh_state=$(gh api "/repos/$owner_repo/issues/$number" --jq '.state' 2>/dev/null || echo "unknown")
+        rel_path="${task_file#$VAULT_PATH/}"
+        STALE_ENTRIES+=("$(jq -n \
+          --arg path "$rel_path" \
+          --arg github_url "$github_url" \
+          --arg key "$key" \
+          --arg state "$gh_state" \
+          --argjson should_resolve "$([ "$gh_state" = "closed" ] || [ "$gh_state" = "merged" ] && echo true || echo false)" \
+          '{path: $path, github_url: $github_url, key: $key, github_state: $state, should_resolve: $should_resolve}'
+        )")
+      fi
+    fi
+  fi
+done < <(find "$DATA_DIR" -name "*-gh-task-*.md" -type f -print0 2>/dev/null)
+
+if [ ${#STALE_ENTRIES[@]} -gt 0 ]; then
+  STALE_TASKS=$(printf '%s\n' "${STALE_ENTRIES[@]}" | jq -s '.')
+fi
+
+echo "  Stale tasks found: ${#STALE_ENTRIES[@]}" >&2
+
+# ---- Step 6: Build thread list from notifications ---------------------------
+# Parse notifications into JSON for Claude's categorization
+
+NOTIF_THREADS="[]"
+if [ -s "$TMPDIR/notifications_raw.txt" ]; then
+  NOTIF_THREADS=$(grep -E '^[0-9]+' "$TMPDIR/notifications_raw.txt" 2>/dev/null | awk '{
+    thread_id = $1
+    repo = $2
+    type = $3
+    reason = $4
+    status = $5
+    updated = $6
+    url = $NF
+    title = ""
+    for (i = 7; i < NF; i++) title = title (i > 7 ? " " : "") $i
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", thread_id, repo, type, reason, status, updated, title, url
+  }' | jq -R 'split("\t") | {
+    thread_id: .[0],
+    repo: .[1],
+    type: .[2],
+    reason: .[3],
+    status: .[4],
+    updated: .[5],
+    title: .[6],
+    url: .[7],
+    source: "notifications"
+  }' | jq -s '.' 2>/dev/null || echo "[]")
+fi
+
+# ---- Output JSON ------------------------------------------------------------
+
+echo "Building output..." >&2
+
+jq -n \
+  --argjson notifications "$NOTIF_THREADS" \
+  --arg involved_raw "$(cat "$TMPDIR/involved_raw.txt" 2>/dev/null || true)" \
+  --arg my_prs_raw "$(cat "$TMPDIR/my_prs_raw.txt" 2>/dev/null || true)" \
+  --argjson github_base "$(cat "$TMPDIR/github_base.json")" \
+  --argjson task_search "$(cat "$TMPDIR/task_search.json")" \
+  --argjson stale_tasks "$STALE_TASKS" \
+  --argjson mark_done_count "$MARK_DONE_COUNT" \
+  --argjson mark_done_errors "$MARK_DONE_ERRORS" \
+  --argjson notif_count "${NOTIF_COUNT:-0}" \
+  --argjson involved_count "${INVOLVED_COUNT:-0}" \
+  --argjson my_prs_count "${MY_PRS_COUNT:-0}" \
+  '{
+    discovery: {
+      notifications: $notifications,
+      involved_raw: $involved_raw,
+      my_prs_raw: $my_prs_raw,
+      counts: {
+        notifications: $notif_count,
+        involved: $involved_count,
+        my_prs: $my_prs_count
+      }
+    },
+    vault_state: {
+      github_notes: $github_base,
+      task_notes: $task_search
+    },
+    mark_done: {
+      count: $mark_done_count,
+      errors: $mark_done_errors
+    },
+    stale_tasks: $stale_tasks
+  }'
+
+echo "GitHub sync data collection complete." >&2

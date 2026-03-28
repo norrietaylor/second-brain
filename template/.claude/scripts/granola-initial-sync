@@ -1,0 +1,516 @@
+#!/usr/bin/env python3
+"""
+granola-initial-sync — Bulk import Granola meetings with rate-limited transcript fetching.
+
+Usage:
+    granola-initial-sync                        # sync last 30 days with transcripts
+    granola-initial-sync --no-transcripts       # sync without transcripts (fast)
+    granola-initial-sync --delay 5              # 5 seconds between transcript fetches (default: 3)
+    granola-initial-sync --time-range this_week # sync only this week
+    granola-initial-sync --dry-run              # show what would be synced
+    granola-initial-sync --status               # show what's already in staging
+
+This script bypasses the Obsidian plugin for initial bulk import. It reads the
+plugin's stored OAuth token, calls the Granola MCP API directly with rate limiting,
+and writes files to the staging folder. The existing granola-ingest script then
+transforms them into vault meeting notes.
+
+Designed for one-time historical import. For ongoing sync, use the Obsidian plugin.
+"""
+
+import json
+import os
+import re
+import sys
+import time
+import urllib.request
+import urllib.error
+from datetime import datetime, UTC
+from pathlib import Path
+
+# ---- Configuration ----------------------------------------------------------
+
+VAULT = os.environ.get("SECOND_BRAIN_VAULT", "{{VAULT_PATH}}")
+MCP_URL = "https://mcp.granola.ai/mcp"
+DEFAULT_DELAY = 3  # seconds between transcript API calls
+MAX_MEETINGS_PER_BATCH = 10
+
+# ---- Helpers ----------------------------------------------------------------
+
+def die(msg):
+    print(f"ERROR: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+def read_plugin_tokens():
+    """Read OAuth tokens from the Obsidian plugin's data.json."""
+    data_path = Path(VAULT) / ".obsidian" / "plugins" / "obsidian-granola-plugin" / "data.json"
+    if not data_path.exists():
+        die(f"Plugin data not found at {data_path}\nMake sure the Granola plugin is installed and authenticated.")
+
+    with open(data_path) as f:
+        data = json.load(f)
+
+    tokens = data.get("oauthTokens")
+    if not tokens:
+        die("No OAuth tokens found. Open Obsidian and authenticate the Granola plugin first.")
+
+    if isinstance(tokens, str):
+        tokens = json.loads(tokens)
+
+    access_token = tokens.get("access_token")
+    if not access_token:
+        die("No access_token in OAuth tokens. Re-authenticate the plugin in Obsidian.")
+
+    return access_token
+
+def read_staging_folder():
+    """Read the staging folder from config.yaml."""
+    config_path = Path(VAULT) / "05 Meta" / "config.yaml"
+    staging = "Granola"
+    if config_path.exists():
+        with open(config_path) as f:
+            for line in f:
+                if "staging_folder:" in line:
+                    staging = line.split(":", 1)[1].strip().strip('"').strip("'")
+                    break
+    return staging
+
+def read_template():
+    """Read the Granola template file."""
+    template_path = Path(VAULT) / "05 Meta" / "templates" / "Granola.md"
+    if not template_path.exists():
+        die(f"Template not found at {template_path}")
+    with open(template_path) as f:
+        return f.read()
+
+def mcp_call(tool_name, arguments, access_token, request_id=1):
+    """Make an MCP JSON-RPC tool call to the Granola API."""
+    payload = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+            "name": tool_name,
+            "arguments": arguments
+        },
+        "id": request_id
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        MCP_URL,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json, text/event-stream"
+        },
+        method="POST"
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            return None  # rate limited
+        body = e.read().decode("utf-8") if e.fp else ""
+        die(f"API error {e.code} calling {tool_name}: {body[:500]}")
+    except urllib.error.URLError as e:
+        die(f"Connection error calling {tool_name}: {e}")
+
+    # Handle SSE-style response (event stream)
+    if body.startswith("event:") or body.startswith("data:"):
+        # Parse SSE events — look for the JSON-RPC result in data lines
+        for line in body.split("\n"):
+            if line.startswith("data:"):
+                data_str = line[5:].strip()
+                if data_str:
+                    try:
+                        parsed = json.loads(data_str)
+                        if "result" in parsed:
+                            return parsed["result"]
+                    except json.JSONDecodeError:
+                        continue
+        die(f"No valid JSON-RPC result in SSE response from {tool_name}")
+
+    # Standard JSON response
+    try:
+        result = json.loads(body)
+    except json.JSONDecodeError:
+        die(f"Invalid JSON response from {tool_name}: {body[:500]}")
+
+    if "error" in result:
+        die(f"API error from {tool_name}: {result['error']}")
+
+    return result.get("result", result)
+
+def extract_text(mcp_result):
+    """Extract text content from an MCP result."""
+    if not mcp_result:
+        return ""
+    content = mcp_result.get("content", [])
+    texts = []
+    for item in content:
+        if isinstance(item, dict) and item.get("type") == "text":
+            texts.append(item.get("text", ""))
+    return "\n".join(texts)
+
+# ---- Parsers ----------------------------------------------------------------
+
+def parse_meeting_list(xml_text):
+    """Parse meeting list XML into a list of {id, title, date, participants}."""
+    meetings = []
+    # Match each <meeting> block
+    for match in re.finditer(
+        r'<meeting\s+id="([^"]*)"[^>]*title="([^"]*)"[^>]*date="([^"]*)"[^>]*>(.*?)</meeting>',
+        xml_text, re.DOTALL
+    ):
+        mid, title, date_str, body = match.groups()
+
+        participants = ""
+        p_match = re.search(r'<known_participants>(.*?)</known_participants>', body, re.DOTALL)
+        if p_match:
+            participants = p_match.group(1).strip()
+
+        meetings.append({
+            "id": mid,
+            "title": title,
+            "date_str": date_str,
+            "participants_raw": participants
+        })
+
+    return meetings
+
+def parse_meeting_detail(xml_text, meeting_id):
+    """Parse a detailed meeting response to extract private_notes and summary."""
+    result = {"private_notes": "", "enhanced_notes": ""}
+
+    # Find the specific meeting block
+    pattern = rf'<meeting\s+id="{re.escape(meeting_id)}"[^>]*>(.*?)</meeting>'
+    match = re.search(pattern, xml_text, re.DOTALL)
+    if not match:
+        # Try without specific ID (single meeting response)
+        match = re.search(r'<meeting[^>]*>(.*?)</meeting>', xml_text, re.DOTALL)
+
+    if match:
+        body = match.group(1)
+
+        pn = re.search(r'<private_notes>(.*?)</private_notes>', body, re.DOTALL)
+        if pn:
+            result["private_notes"] = pn.group(1).strip()
+
+        summary = re.search(r'<summary>(.*?)</summary>', body, re.DOTALL)
+        if summary:
+            result["enhanced_notes"] = summary.group(1).strip()
+
+    return result
+
+def parse_participants(raw):
+    """Parse participant string into list of {name, email, is_creator}."""
+    if not raw:
+        return []
+
+    participants = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+
+        is_creator = "(note creator)" in part
+        part = part.replace("(note creator)", "").strip()
+
+        # Extract email if present
+        email = ""
+        email_match = re.search(r'<([^>]+)>', part)
+        if email_match:
+            email = email_match.group(1)
+            part = part[:email_match.start()].strip()
+
+        # Extract name (before "from <org>")
+        name = re.split(r'\s+from\s+', part)[0].strip()
+
+        if name:
+            participants.append({
+                "name": name,
+                "email": email,
+                "is_creator": is_creator
+            })
+
+    return participants
+
+def parse_transcript(raw_text):
+    """Format raw transcript text with speaker labels."""
+    if not raw_text:
+        return ""
+
+    # Try JSON parse first
+    try:
+        data = json.loads(raw_text)
+        raw_text = data.get("transcript", raw_text) or ""
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    if not raw_text:
+        return ""
+
+    # Format speaker labels
+    formatted = re.sub(r'\b(Me|Them):', r'\n**\1:**', str(raw_text))
+    return formatted.strip()
+
+def parse_date(date_str):
+    """Parse date string to YYYY-MM-DD format."""
+    # Try common formats
+    for fmt in ["%b %d, %Y %I:%M %p", "%b %d, %Y", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"]:
+        try:
+            dt = datetime.strptime(date_str.strip(), fmt)
+            return dt.strftime("%Y-%m-%d"), dt.strftime("%I:%M %p").lstrip("0")
+        except ValueError:
+            continue
+    # Fallback: try to extract date portion
+    m = re.search(r'(\w+ \d+, \d{4})', date_str)
+    if m:
+        try:
+            dt = datetime.strptime(m.group(1), "%b %d, %Y")
+            return dt.strftime("%Y-%m-%d"), ""
+        except ValueError:
+            pass
+    return date_str, ""
+
+def render_template(template, variables):
+    """Render template with {{variable}} substitution and {{#var}}...{{/var}} conditionals."""
+    result = template
+
+    # Handle conditionals first: {{#var}}content{{/var}}
+    def replace_conditional(match):
+        var_name = match.group(1)
+        content = match.group(2)
+        value = variables.get(var_name, "").strip()
+        return content if value else ""
+
+    result = re.sub(r'\{\{#(\w+)\}\}([\s\S]*?)\{\{/\1\}\}', replace_conditional, result)
+
+    # Handle simple variables: {{var}}
+    def replace_var(match):
+        var_name = match.group(1)
+        return variables.get(var_name, match.group(0))
+
+    result = re.sub(r'\{\{(\w+)\}\}', replace_var, result)
+
+    return result
+
+def sanitize_filename(name, max_len=100):
+    """Sanitize a string for use as a filename."""
+    name = re.sub(r'[/\\?%*:|"<>]', '-', name)
+    return name[:max_len].strip('. -')
+
+# ---- Main -------------------------------------------------------------------
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Bulk import Granola meetings with rate limiting")
+    parser.add_argument("--time-range", default="last_30_days",
+                        choices=["this_week", "last_week", "last_30_days"],
+                        help="Time range to sync (default: last_30_days)")
+    parser.add_argument("--delay", type=float, default=DEFAULT_DELAY,
+                        help=f"Seconds between transcript API calls (default: {DEFAULT_DELAY})")
+    parser.add_argument("--no-transcripts", action="store_true",
+                        help="Skip transcript fetching (faster)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Show what would be synced without writing")
+    parser.add_argument("--status", action="store_true",
+                        help="Show what's already in the staging folder")
+    args = parser.parse_args()
+
+    staging_folder = read_staging_folder()
+    staging_dir = Path(VAULT) / staging_folder
+
+    # Status mode
+    if args.status:
+        if not staging_dir.exists():
+            print(f"No staging folder at {staging_dir}")
+            return
+        files = sorted(staging_dir.glob("*.md"))
+        print(f"Staging folder: {staging_dir}")
+        print(f"Files: {len(files)}")
+        for f in files:
+            print(f"  {f.name}")
+        return
+
+    # Read auth and template
+    print("Reading plugin auth token...")
+    access_token = read_plugin_tokens()
+    template = read_template()
+
+    # Ensure staging dir exists
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
+    # Check existing files for dedup
+    existing_ids = set()
+    for f in staging_dir.glob("*.md"):
+        with open(f) as fh:
+            for line in fh:
+                if line.startswith("granola_id:"):
+                    gid = line.split(":", 1)[1].strip().strip('"')
+                    existing_ids.add(gid)
+                    break
+
+    # Step 1: List meetings
+    print(f"Fetching meeting list ({args.time_range})...")
+    result = mcp_call("list_meetings", {"time_range": args.time_range}, access_token)
+    if not result:
+        die("Failed to fetch meeting list (rate limited). Try again in a minute.")
+
+    text = extract_text(result)
+    meetings = parse_meeting_list(text)
+
+    if not meetings:
+        print("No meetings found.")
+        return
+
+    # Filter out meetings that are already in staging
+    new_meetings = [m for m in meetings if m["id"] not in existing_ids]
+    skipped = len(meetings) - len(new_meetings)
+
+    print(f"Found {len(meetings)} meetings, {skipped} already in staging, {len(new_meetings)} new")
+
+    if not new_meetings:
+        print("Nothing to sync.")
+        return
+
+    if args.dry_run:
+        print("\n[DRY RUN] Would sync:")
+        for m in new_meetings:
+            date, _ = parse_date(m["date_str"])
+            print(f"  {date} {m['title']}")
+            if m["participants_raw"]:
+                participants = parse_participants(m["participants_raw"])
+                names = [p["name"] for p in participants]
+                print(f"    Attendees: {', '.join(names)}")
+        print(f"\nTotal: {len(new_meetings)} meetings")
+        if not args.no_transcripts:
+            est_time = len(new_meetings) * args.delay
+            print(f"Estimated time with transcripts: ~{est_time:.0f}s ({args.delay}s delay between fetches)")
+        return
+
+    # Step 2: Fetch meeting details in batches of 10
+    print(f"\nFetching meeting details (batches of {MAX_MEETINGS_PER_BATCH})...")
+    all_details = {}
+
+    for i in range(0, len(new_meetings), MAX_MEETINGS_PER_BATCH):
+        batch = new_meetings[i:i + MAX_MEETINGS_PER_BATCH]
+        batch_ids = [m["id"] for m in batch]
+        batch_num = (i // MAX_MEETINGS_PER_BATCH) + 1
+        total_batches = (len(new_meetings) + MAX_MEETINGS_PER_BATCH - 1) // MAX_MEETINGS_PER_BATCH
+
+        print(f"  Batch {batch_num}/{total_batches} ({len(batch_ids)} meetings)...")
+
+        result = mcp_call("get_meetings", {"meeting_ids": batch_ids}, access_token, request_id=batch_num + 1)
+        if not result:
+            print(f"  WARNING: Rate limited on batch {batch_num}. Waiting 10s and retrying...")
+            time.sleep(10)
+            result = mcp_call("get_meetings", {"meeting_ids": batch_ids}, access_token, request_id=batch_num + 100)
+            if not result:
+                print(f"  SKIPPED batch {batch_num} due to rate limiting")
+                continue
+
+        detail_text = extract_text(result)
+        for m in batch:
+            details = parse_meeting_detail(detail_text, m["id"])
+            all_details[m["id"]] = details
+
+        if i + MAX_MEETINGS_PER_BATCH < len(new_meetings):
+            time.sleep(1)  # Brief pause between batches
+
+    # Step 3: Fetch transcripts (rate limited)
+    transcripts = {}
+    if not args.no_transcripts:
+        print(f"\nFetching transcripts ({args.delay}s delay between calls)...")
+        for idx, m in enumerate(new_meetings):
+            mid = m["id"]
+            progress = f"[{idx + 1}/{len(new_meetings)}]"
+            print(f"  {progress} {m['title'][:60]}...", end="", flush=True)
+
+            result = mcp_call("get_meeting_transcript", {"meeting_id": mid}, access_token, request_id=idx + 200)
+            if result:
+                raw = extract_text(result)
+                transcripts[mid] = parse_transcript(raw)
+                print(" OK")
+            else:
+                print(" RATE LIMITED - waiting 15s...")
+                time.sleep(15)
+                result = mcp_call("get_meeting_transcript", {"meeting_id": mid}, access_token, request_id=idx + 500)
+                if result:
+                    raw = extract_text(result)
+                    transcripts[mid] = parse_transcript(raw)
+                    print(f"  {progress} retry OK")
+                else:
+                    print(f"  {progress} SKIPPED (still rate limited)")
+
+            if idx < len(new_meetings) - 1:
+                time.sleep(args.delay)
+
+    # Step 4: Write files to staging folder
+    print(f"\nWriting {len(new_meetings)} files to {staging_folder}/...")
+    written = 0
+
+    for m in new_meetings:
+        mid = m["id"]
+        date, start_time = parse_date(m["date_str"])
+        participants = parse_participants(m["participants_raw"])
+        details = all_details.get(mid, {"private_notes": "", "enhanced_notes": ""})
+        transcript = transcripts.get(mid, "")
+
+        # Build attendee lists
+        attendees_linked_list = "\n".join(f'  - "[[{p["name"]}]]"' for p in participants)
+
+        # Build template variables
+        variables = {
+            "granola_id": mid,
+            "granola_title": m["title"],
+            "granola_date": date,
+            "granola_url": f"https://notes.granola.ai/d/{mid}",
+            "granola_start_time": start_time,
+            "granola_created": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "granola_updated": "",
+            "granola_private_notes": details["private_notes"],
+            "granola_enhanced_notes": details["enhanced_notes"],
+            "granola_transcript": transcript,
+            "granola_attendees": ", ".join(p["name"] for p in participants),
+            "granola_attendees_linked": ", ".join(f'[[{p["name"]}]]' for p in participants),
+            "granola_attendees_list": "\n".join(f'  - "{p["name"]}"' for p in participants),
+            "granola_attendees_linked_list": attendees_linked_list,
+            "granola_duration": "",
+            "granola_end_time": "",
+        }
+
+        # Render template
+        content = render_template(template, variables)
+
+        # Generate filename: "{date} {title}.md"
+        safe_title = sanitize_filename(m["title"])
+        filename = f"{date} {safe_title}.md"
+        filepath = staging_dir / filename
+
+        # Collision avoidance
+        counter = 2
+        while filepath.exists():
+            filename = f"{date} {safe_title} {counter}.md"
+            filepath = staging_dir / filename
+            counter += 1
+
+        with open(filepath, "w") as f:
+            f.write(content)
+
+        written += 1
+        print(f"  {filename}")
+
+    # Summary
+    print(f"\nSync complete:")
+    print(f"  Meetings written: {written}")
+    print(f"  With transcripts: {len(transcripts)}")
+    if len(new_meetings) > len(transcripts) and not args.no_transcripts:
+        print(f"  Missing transcripts: {len(new_meetings) - len(transcripts)} (rate limited)")
+        print(f"  Re-run to fetch missing transcripts")
+    print(f"\nNext step: run 'granola-ingest' or let /eod process them")
+
+if __name__ == "__main__":
+    main()

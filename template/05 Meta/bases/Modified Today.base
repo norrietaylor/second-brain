@@ -1,0 +1,14 @@
+filters:
+  and:
+    - file.inFolder("04 Data")
+    - file.mtime >= today()
+views:
+  - type: table
+    name: Modified Today
+    order:
+      - file.name
+      - type
+      - file.mtime
+    sort:
+      - property: file.mtime
+        direction: DESC

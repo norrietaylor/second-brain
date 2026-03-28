@@ -1,0 +1,759 @@
+#!/bin/bash
+# granola-ingest — Transform staged Granola notes into vault meeting notes
+#
+# Usage:
+#   granola-ingest              — process all staged Granola notes
+#   granola-ingest --dry-run    — preview transformations without writing
+#
+# Reads staged Granola markdown files from the vault's staging folder (default:
+# Granola/), derives meeting frontmatter, creates properly-typed meeting notes
+# in 04 Data/YYYY/MM/, and deletes the staging files on success.
+#
+# Configuration (05 Meta/config.yaml):
+#   granola.self_name        — user's own name (excluded from attendee counts)
+#   granola.staging_folder   — relative path to staging folder (default: Granola)
+#   granola.series_overrides — map of title → meeting_name for edge cases
+#
+# Environment overrides:
+#   SECOND_BRAIN_VAULT  — vault path (default: {{VAULT_PATH}})
+#   SECOND_BRAIN_NAME   — vault name for Obsidian CLI (default: {{VAULT_NAME}})
+
+set -euo pipefail
+
+# ---- Configuration -----------------------------------------------------------
+
+VAULT="${SECOND_BRAIN_VAULT:-{{VAULT_PATH}}}"
+VAULT_NAME="${SECOND_BRAIN_NAME:-{{VAULT_NAME}}}"
+CONFIG_FILE="$VAULT/05 Meta/config.yaml"
+
+DRY_RUN=false
+if [ "${1:-}" = "--dry-run" ]; then
+    DRY_RUN=true
+fi
+
+# ---- Helpers -----------------------------------------------------------------
+
+die() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+# Read a scalar value from config.yaml using basic grep/sed (no yq dependency)
+# Usage: config_get "granola.self_name"
+config_get() {
+    local key="$1"
+    # Split on dot to handle simple two-level keys
+    local section="${key%%.*}"
+    local field="${key#*.}"
+
+    if [ "$section" = "$field" ]; then
+        # Top-level key
+        grep -m1 "^${field}:" "$CONFIG_FILE" 2>/dev/null \
+            | sed 's/^[^:]*:[[:space:]]*//' \
+            | tr -d '"' \
+            || true
+    else
+        # Two-level key: find section block, then the field within it
+        awk -v section="$section" -v field="$field" '
+            BEGIN { in_section=0 }
+            /^[a-zA-Z]/ { in_section=($0 ~ "^"section":") }
+            in_section && $0 ~ "^[[:space:]]+"field":" {
+                sub(/^[[:space:]]*[^:]*:[[:space:]]*/, "")
+                gsub(/"/, "")
+                print
+                exit
+            }
+        ' "$CONFIG_FILE" 2>/dev/null || true
+    fi
+}
+
+# Read a YAML list from config.yaml (two-level key, e.g. "granola.self_aliases")
+# Returns one item per line, quotes stripped.
+config_get_list() {
+    local key="$1"
+    local section="${key%%.*}"
+    local field="${key#*.}"
+
+    awk -v section="$section" -v field="$field" '
+        BEGIN { in_section=0; in_list=0 }
+        /^[a-zA-Z]/ { if (in_list) exit; in_section=($0 ~ "^"section":") }
+        in_section && $0 ~ "^[[:space:]]+"field":" {
+            # Check for inline list: field: [a, b, c]
+            if ($0 ~ /\[/) {
+                val = $0
+                sub(/^[^[]*\[/, "", val)
+                sub(/\].*$/, "", val)
+                n = split(val, parts, /,/)
+                for (i=1; i<=n; i++) {
+                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", parts[i])
+                    gsub(/"/, "", parts[i])
+                    if (parts[i] != "") print parts[i]
+                }
+                exit
+            }
+            in_list = 1
+            next
+        }
+        in_list && /^[[:space:]]*-[[:space:]]/ {
+            val = $0
+            sub(/^[[:space:]]*-[[:space:]]*/, "", val)
+            gsub(/"/, "", val)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
+            if (val != "") print val
+            next
+        }
+        in_list && /^[[:space:]]*[^-[:space:]]/ { exit }
+    ' "$CONFIG_FILE" 2>/dev/null || true
+}
+
+# Parse a frontmatter field from a staged file's content
+# Usage: fm_get "granola_id" "$content"
+fm_get() {
+    local field="$1"
+    local content="$2"
+    echo "$content" | awk -v f="$field" '
+        /^---$/ { count++; next }
+        count == 1 && $0 ~ "^"f":" {
+            sub(/^[^:]*:[[:space:]]*/, "")
+            gsub(/^"/, ""); gsub(/"$/, "")
+            print
+            exit
+        }
+        count >= 2 { exit }
+    '
+}
+
+# Parse the attendees YAML list from frontmatter.
+# Handles both inline list and block list formats.
+# Returns one attendee per line (names only, wiki-link markup stripped).
+fm_get_attendees() {
+    local content="$1"
+    echo "$content" | awk '
+        /^---$/ { count++; next }
+        count >= 2 { exit }
+        count == 1 && /^attendees:/ {
+            # Check for inline list: attendees: [A, B, C]
+            if ($0 ~ /\[/) {
+                gsub(/^attendees:[[:space:]]*\[/, "")
+                gsub(/\].*$/, "")
+                n = split($0, parts, /,/)
+                for (i=1; i<=n; i++) {
+                    val = parts[i]
+                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
+                    gsub(/"/, "", val)
+                    if (val != "") print val
+                }
+            } else {
+                # Block list — collect following lines starting with "-"
+                in_attendees = 1
+            }
+            next
+        }
+        count == 1 && in_attendees && /^[[:space:]]*-[[:space:]]/ {
+            val = $0
+            gsub(/^[[:space:]]*-[[:space:]]/, "", val)
+            gsub(/"/, "", val)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
+            print val
+            next
+        }
+        count == 1 && in_attendees && /^[^ ]/ { in_attendees = 0 }
+    '
+}
+
+# Strip wiki-link markup from an attendee name: [[2026.03.22-alice|Alice Smith]] → Alice Smith
+strip_wikilink() {
+    echo "$1" | sed 's/\[\[[^|]*|\([^]]*\)\]\]/\1/g; s/\[\[\([^]]*\)\]\]/\1/g'
+}
+
+# Convert a title to kebab-case meeting_name:
+# 1. Strip trailing date/number patterns
+# 2. Lowercase and replace non-alphanumeric runs with hyphens
+# 3. Trim leading/trailing hyphens
+derive_meeting_name() {
+    local title="$1"
+    # Strip common trailing patterns (must be tried in decreasing specificity)
+    # e.g. " - March 22", " (2026-03-22)", " #5", " v3.2", ordinals like "5th"
+    local name="$title"
+
+    # Strip parenthetical dates like (2026-03-22) or (March 22)
+    name=$(echo "$name" | sed 's/[[:space:]]*([0-9][^)]*)[[:space:]]*$//g')
+    name=$(echo "$name" | sed 's/[[:space:]]*(Jan\|Feb\|Mar\|Apr\|May\|Jun\|Jul\|Aug\|Sep\|Oct\|Nov\|Dec)[^)]*)[[:space:]]*$//g')
+
+    # Strip trailing " - <Month> <day>" or " - <date>"
+    name=$(echo "$name" | sed 's/[[:space:]]*-[[:space:]]*[A-Z][a-z][a-z][a-z]*[[:space:]]*[0-9]*[[:space:]]*$//g')
+    name=$(echo "$name" | sed 's/[[:space:]]*-[[:space:]]*[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9][[:space:]]*$//g')
+
+    # Strip trailing " #N" (sprint number, episode number, etc.)
+    name=$(echo "$name" | sed 's/[[:space:]]*#[0-9][0-9]*[[:space:]]*$//g')
+
+    # Strip trailing version-like suffixes " v<N>" or " v<N.N>"
+    name=$(echo "$name" | sed 's/[[:space:]]*v[0-9][0-9.]*[[:space:]]*$//g')
+
+    # Strip trailing ordinals " 5th", " 2nd", etc.
+    name=$(echo "$name" | sed 's/[[:space:]]*[0-9][0-9]*\(st\|nd\|rd\|th\)[[:space:]]*$//g')
+
+    # Replace ":" and "/" with space before kebab conversion
+    name=$(echo "$name" | tr ':/' '  ')
+
+    # Kebab-case: lowercase, replace runs of non-alphanumeric (except hyphens) with "-"
+    name=$(echo "$name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-][^a-z0-9-]*/-/g; s/--*/-/g; s/^-//; s/-$//')
+
+    echo "$name"
+}
+
+# Kebab-case a person's name for use in 1on1 meeting names and filenames
+kebab_name() {
+    echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-][^a-z0-9-]*/-/g; s/--*/-/g; s/^-//; s/-$//'
+}
+
+# Check if a vault note with the given granola_id already exists.
+# Returns the path if found, empty string if not.
+find_by_granola_id() {
+    local granola_id="$1"
+    obsidian "vault=$VAULT_NAME" search "query=granola_id: $granola_id" path="04 Data" format=json 2>/dev/null \
+        | grep -o '"path":"[^"]*"' \
+        | head -1 \
+        | sed 's/"path":"//; s/"//' \
+        || true
+}
+
+# Search for an existing person note by name (case-insensitive) or by alias (kebab-case).
+# Uses full-text search to find candidates then filters by frontmatter.
+# Returns the vault-relative path (e.g. "04 Data/2026/01/2026.01.10-alice-smith.md") if found,
+# or empty string if not found.
+find_person_note() {
+    local display_name="$1"
+    local kebab="$2"
+
+    # Do a full-text search for the name, then check each candidate's frontmatter
+    local candidates
+    candidates=$(obsidian "vault=$VAULT_NAME" search "query=$display_name" path="04 Data" format=json 2>/dev/null \
+        | grep -o '"[^"]*\.md"' | sed 's/"//g' || true)
+
+    if [ -z "$candidates" ]; then
+        # Also try alias search
+        candidates=$(obsidian "vault=$VAULT_NAME" search "query=$kebab" path="04 Data" format=json 2>/dev/null \
+            | grep -o '"[^"]*\.md"' | sed 's/"//g' || true)
+    fi
+
+    while IFS= read -r candidate_path; do
+        [ -z "$candidate_path" ] && continue
+        local candidate_full="$VAULT/$candidate_path"
+        [ -f "$candidate_full" ] || continue
+
+        local cand_content
+        cand_content=$(cat "$candidate_full" 2>/dev/null || true)
+
+        # Must be type: person
+        local cand_type
+        cand_type=$(fm_get "type" "$cand_content")
+        [ "$cand_type" = "person" ] || continue
+
+        # Check name field (case-insensitive)
+        local cand_name
+        cand_name=$(fm_get "name" "$cand_content" | tr -d '"')
+        if echo "$cand_name" | grep -qi "^${display_name}$"; then
+            echo "$candidate_path"
+            return
+        fi
+
+        # Check aliases field for kebab match
+        if echo "$cand_content" | awk '
+            /^---$/ { count++; next }
+            count >= 2 { exit }
+            count == 1 && /^aliases:/ { in_aliases=1; next }
+            count == 1 && in_aliases && /^[[:space:]]*-/ {
+                val=$0; gsub(/^[[:space:]]*-[[:space:]]*/, "", val); gsub(/"/, "", val); print val; next
+            }
+            count == 1 && in_aliases && /^[^[:space:]]/ { in_aliases=0 }
+        ' | grep -q "^${kebab}$"; then
+            echo "$candidate_path"
+            return
+        fi
+    done <<< "$candidates"
+}
+
+# Create a minimal person stub note.
+# Usage: create_person_stub "Bob Jones" "2026-03-22" "weekly-sync" "2026.03.22-weekly-sync"
+create_person_stub() {
+    local display_name="$1"
+    local meeting_date="$2"        # YYYY-MM-DD
+    local meeting_name_val="$3"    # kebab meeting name (for context text)
+    local meeting_filename="$4"    # YYYY.MM.DD-meeting-name (for wiki-link)
+
+    local kebab
+    kebab=$(kebab_name "$display_name")
+
+    local year="${meeting_date:0:4}"
+    local month="${meeting_date:5:2}"
+    local day="${meeting_date:8:2}"
+    local date_dots="${year}.${month}.${day}"
+    local stub_rel="04 Data/${year}/${month}/${date_dots}-${kebab}.md"
+
+    # Collision avoidance: if the path already exists, it may be a different person
+    local suffix=1
+    while [ -f "$VAULT/$stub_rel" ]; do
+        suffix=$((suffix + 1))
+        stub_rel="04 Data/${year}/${month}/${date_dots}-${kebab}-${suffix}.md"
+    done
+
+    local stub_content="---
+type: person
+name: \"${display_name}\"
+context: \"Met in ${meeting_name_val} meeting\"
+last_touched: \"${meeting_date}\"
+aliases:
+  - \"${kebab}\"
+created: \"${NOW}\"
+modified: \"${NOW}\"
+classified_at: \"${NOW}\"
+confidence: 0.8
+---
+
+## Notes
+
+Auto-created from Granola meeting [[${meeting_filename}|${meeting_name_val}]]"
+
+    mkdir -p "$VAULT/04 Data/${year}/${month}"
+    obsidian "vault=$VAULT_NAME" create "path=$stub_rel" "content=$stub_content" silent >/dev/null 2>&1 || true
+
+    if [ -f "$VAULT/$stub_rel" ]; then
+        echo "$stub_rel"
+    fi
+}
+
+# Update last_touched on an existing person note if the meeting date is newer.
+# Usage: update_last_touched "04 Data/2026/01/2026.01.10-alice-smith.md" "2026-03-22"
+update_last_touched() {
+    local person_path="$1"
+    local meeting_date="$2"
+
+    local existing_content
+    existing_content=$(cat "$VAULT/$person_path" 2>/dev/null || true)
+    local current_lt
+    current_lt=$(fm_get "last_touched" "$existing_content" | tr -d '"')
+
+    # Compare dates lexicographically (YYYY-MM-DD format sorts correctly)
+    if [[ "$meeting_date" > "$current_lt" ]]; then
+        obsidian "vault=$VAULT_NAME" property:set "path=$person_path" name=last_touched "value=$meeting_date" >/dev/null 2>&1 || true
+        obsidian "vault=$VAULT_NAME" property:set "path=$person_path" name=modified "value=$NOW" >/dev/null 2>&1 || true
+    fi
+}
+
+# Rewrite the ## Attendees section in a meeting note with wiki-links.
+# Usage: rewrite_attendees_section "04 Data/2026/03/2026.03.22-weekly-sync.md" "wiki-link-list-one-per-line"
+rewrite_attendees_section() {
+    local note_path="$1"
+    local wikilinks_block="$2"   # newline-separated wiki-link lines
+
+    local full_path="$VAULT/$note_path"
+    if [ ! -f "$full_path" ]; then
+        return
+    fi
+
+    # Write note content to a temp file for Python to process
+    local tmp_in tmp_out
+    tmp_in=$(mktemp)
+    tmp_out=$(mktemp)
+    cat "$full_path" > "$tmp_in"
+
+    # Use Python to replace the ## Attendees section (handles multiline cleanly)
+    python3 - "$tmp_in" "$tmp_out" "$wikilinks_block" <<'PYEOF'
+import sys, re
+
+input_file  = sys.argv[1]
+output_file = sys.argv[2]
+new_links   = sys.argv[3]
+
+with open(input_file, 'r') as f:
+    content = f.read()
+
+new_section = '## Attendees\n\n' + new_links + '\n'
+
+# Replace ## Attendees section (up to next ## heading or end of file)
+pattern = r'## Attendees\n.*?(?=\n## |\Z)'
+new_content = re.sub(pattern, new_section.rstrip('\n'), content, flags=re.DOTALL)
+
+with open(output_file, 'w') as f:
+    f.write(new_content)
+PYEOF
+
+    if [ -s "$tmp_out" ]; then
+        # Write updated content directly to the file (obsidian create won't overwrite)
+        cp "$tmp_out" "$full_path"
+    fi
+    rm -f "$tmp_in" "$tmp_out"
+}
+
+# Read series_overrides from config.yaml as "title|meeting_name" pairs (one per line)
+get_series_overrides() {
+    awk '
+        /^granola:/ { in_granola=1; next }
+        in_granola && /^[a-zA-Z]/ && !/^[[:space:]]/ { in_granola=0 }
+        in_granola && /series_overrides:/ { in_overrides=1; next }
+        in_granola && in_overrides && /^[[:space:]]+[^-]/ {
+            # Key: value line under series_overrides
+            line = $0
+            gsub(/^[[:space:]]+/, "", line)
+            # Split on first ": "
+            idx = index(line, ": ")
+            if (idx > 0) {
+                k = substr(line, 1, idx-1)
+                v = substr(line, idx+2)
+                gsub(/"/, "", k); gsub(/"/, "", v)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", k)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+                print k "|" v
+            }
+            next
+        }
+        in_granola && in_overrides && (/^[[:space:]]+[a-zA-Z]/ && !/^[[:space:]]+[a-zA-Z_-]*:/) { in_overrides=0 }
+    ' "$CONFIG_FILE" 2>/dev/null || true
+}
+
+# Look up series_overrides for the given title. Returns empty if no override.
+lookup_series_override() {
+    local title="$1"
+    get_series_overrides | while IFS='|' read -r key val; do
+        if [ "$key" = "$title" ]; then
+            echo "$val"
+            return
+        fi
+    done
+}
+
+# Extract body (everything after the closing ---) from note content
+extract_body() {
+    local content="$1"
+    echo "$content" | awk '
+        /^---$/ { count++; if (count == 2) { found=1; next } }
+        found { print }
+    '
+}
+
+# Generate the collision-avoided target filename in 04 Data/YYYY/MM/
+# Returns just the relative path under vault root
+generate_target_path() {
+    local date="$1"          # YYYY-MM-DD
+    local meeting_name="$2"  # kebab-case
+    local skip_granola_id="${3:-}"
+
+    local year="${date:0:4}"
+    local month="${date:5:2}"
+    local date_dots="${year}.${month}.${date:8:2}"
+    local base_name="${date_dots}-${meeting_name}"
+    local target_dir="04 Data/${year}/${month}"
+    local candidate="${target_dir}/${base_name}.md"
+
+    # Check if candidate exists AND has a different granola_id (collision)
+    local suffix=1
+    while [ -f "$VAULT/$candidate" ]; do
+        if [ -n "$skip_granola_id" ]; then
+            # If the existing file has the SAME granola_id, this is a dedup case
+            existing_content=$(cat "$VAULT/$candidate" 2>/dev/null || true)
+            existing_gid=$(fm_get "granola_id" "$existing_content")
+            if [ "$existing_gid" = "$skip_granola_id" ]; then
+                # Same file — return as-is (caller handles dedup)
+                echo "$candidate"
+                return
+            fi
+        fi
+        suffix=$((suffix + 1))
+        candidate="${target_dir}/${base_name}-${suffix}.md"
+    done
+
+    echo "$candidate"
+}
+
+# ---- Main processing ---------------------------------------------------------
+
+# Read config
+SELF_NAME=$(config_get "granola.self_name")
+
+# Build list of all self-name variants (lowercased) for matching
+SELF_NAMES_LOWER=()
+SELF_NAMES_LOWER+=("$(echo "$SELF_NAME" | tr '[:upper:]' '[:lower:]')")
+while IFS= read -r alias; do
+    [ -z "$alias" ] && continue
+    SELF_NAMES_LOWER+=("$(echo "$alias" | tr '[:upper:]' '[:lower:]')")
+done < <(config_get_list "granola.self_aliases")
+
+# Helper: returns 0 (true) if argument matches any self name/alias
+is_self() {
+    local name_lower
+    name_lower=$(echo "$1" | tr '[:upper:]' '[:lower:]')
+    for self_variant in "${SELF_NAMES_LOWER[@]}"; do
+        [ "$name_lower" = "$self_variant" ] && return 0
+    done
+    return 1
+}
+
+STAGING_FOLDER=$(config_get "granola.staging_folder")
+STAGING_FOLDER="${STAGING_FOLDER:-Granola}"
+STAGING_DIR="$VAULT/$STAGING_FOLDER"
+
+# Verify staging folder exists (no-op if missing)
+if [ ! -d "$STAGING_DIR" ]; then
+    exit 0
+fi
+
+# Collect staged .md files
+FILES=()
+for file in "$STAGING_DIR"/*.md; do
+    [ -f "$file" ] || continue
+    FILES+=("$file")
+done
+
+if [ ${#FILES[@]} -eq 0 ]; then
+    exit 0
+fi
+
+# Require obsidian CLI for non-dry-run mode
+if [ "$DRY_RUN" = false ] && ! command -v obsidian &>/dev/null; then
+    die "Obsidian CLI required. Install: https://obsidian.md/cli"
+fi
+
+# Validate template contains {{granola_id}} placeholder
+TEMPLATE_FILE="$VAULT/05 Meta/templates/Granola.md"
+if [ ! -f "$TEMPLATE_FILE" ]; then
+    die "Template file not found: 05 Meta/templates/Granola.md"
+fi
+if ! grep -q "{{granola_id}}" "$TEMPLATE_FILE"; then
+    die "Template file missing required {{granola_id}} placeholder: 05 Meta/templates/Granola.md"
+fi
+
+NOW=$(date +"%Y-%m-%d %H:%M")
+INGESTED=0
+SKIPPED=0
+INGESTED_NAMES=()
+PERSON_STUBS_CREATED=()
+PERSON_STUBS_NAMES=()
+
+for file in "${FILES[@]}"; do
+    filename=$(basename "$file")
+    content=$(cat "$file")
+
+    # --- Parse frontmatter fields ---
+    granola_id=$(fm_get "granola_id" "$content")
+    title=$(fm_get "title" "$content")
+    date=$(fm_get "date" "$content")
+    start_time=$(fm_get "start_time" "$content")
+    granola_url=$(fm_get "granola_url" "$content")
+
+    if [ -z "$granola_id" ] || [ -z "$title" ] || [ -z "$date" ]; then
+        echo "  Skipping $filename — missing required frontmatter (granola_id, title, or date)" >&2
+        continue
+    fi
+
+    # --- Dedup: skip if vault already has this granola_id ---
+    if [ "$DRY_RUN" = false ]; then
+        existing=$(find_by_granola_id "$granola_id")
+        if [ -n "$existing" ]; then
+            echo "  Skipped (already exists): $title [granola_id=$granola_id → $existing]"
+            SKIPPED=$((SKIPPED + 1))
+            continue
+        fi
+    fi
+
+    # --- Parse attendees ---
+    raw_attendees_list=$(fm_get_attendees "$content")
+
+    # Build array of attendee display names (strip wiki-links)
+    ATTENDEE_NAMES=()
+    while IFS= read -r raw_att; do
+        [ -z "$raw_att" ] && continue
+        att_name=$(strip_wikilink "$raw_att")
+        ATTENDEE_NAMES+=("$att_name")
+    done <<< "$raw_attendees_list"
+
+    # --- Determine meeting_name ---
+    # 1. Check series_overrides
+    meeting_name=$(lookup_series_override "$title")
+
+    # 2. Check 1-on-1 detection (excluding self via name + aliases)
+    OTHER_ATTENDEES=()
+    for att in "${ATTENDEE_NAMES[@]}"; do
+        is_self "$att" && continue
+        OTHER_ATTENDEES+=("$att")
+    done
+
+    IS_1ON1=false
+    TAGS=()
+
+    if [ ${#OTHER_ATTENDEES[@]} -eq 1 ] && [ -z "$meeting_name" ]; then
+        IS_1ON1=true
+        TAGS+=("1on1")
+        person_kebab=$(kebab_name "${OTHER_ATTENDEES[0]}")
+        meeting_name="1on1-${person_kebab}"
+    fi
+
+    # 3. Fall back to title normalization
+    if [ -z "$meeting_name" ]; then
+        meeting_name=$(derive_meeting_name "$title")
+    fi
+
+    # --- Generate target path ---
+    target_path=$(generate_target_path "$date" "$meeting_name" "$granola_id")
+
+    # Dry-run: just show what would happen
+    if [ "$DRY_RUN" = true ]; then
+        echo "  [DRY-RUN] $filename"
+        echo "    title:        $title"
+        echo "    meeting_name: $meeting_name"
+        echo "    date:         $date"
+        echo "    is_1on1:      $IS_1ON1"
+        echo "    target:       $target_path"
+        echo "    granola_id:   $granola_id"
+        INGESTED=$((INGESTED + 1))
+        INGESTED_NAMES+=("$meeting_name")
+        continue
+    fi
+
+    # --- Build attendees YAML list ---
+    ATTENDEES_YAML=""
+    for att in "${ATTENDEE_NAMES[@]}"; do
+        ATTENDEES_YAML="${ATTENDEES_YAML}  - \"${att}\"\n"
+    done
+
+    # --- Build tags YAML list ---
+    TAGS_YAML="[]"
+    if [ ${#TAGS[@]} -gt 0 ]; then
+        TAGS_YAML="[$(IFS=', '; echo "${TAGS[*]}")]"
+    fi
+
+    # --- Build aliases ---
+    alias_name="$meeting_name"
+
+    # --- Preserve body from staged note ---
+    body=$(extract_body "$content")
+
+    # --- Build full note content ---
+    year="${date:0:4}"
+    month="${date:5:2}"
+    day="${date:8:2}"
+
+    note_content="---
+type: meeting
+meeting_name: \"${meeting_name}\"
+date: \"${date}\"
+attendees:
+$(printf '%b' "$ATTENDEES_YAML")
+is_1on1: ${IS_1ON1}
+granola_id: \"${granola_id}\"
+granola_url: \"${granola_url}\"
+source: granola
+start_time: \"${start_time}\"
+tags: ${TAGS_YAML}
+aliases:
+  - \"${alias_name}\"
+created: \"${NOW}\"
+modified: \"${NOW}\"
+classified_at: \"${NOW}\"
+confidence: 1.0
+---
+${body}"
+
+    # Ensure target directory exists in the vault
+    target_dir_full="$VAULT/$(dirname "$target_path")"
+    mkdir -p "$target_dir_full"
+
+    # Create the note via Obsidian CLI
+    CLI_OUTPUT=$(obsidian "vault=$VAULT_NAME" create "path=$target_path" "content=$note_content" silent 2>&1) || true
+
+    if [ -f "$VAULT/$target_path" ]; then
+        rm -f "$file"
+        echo "  Ingested: $title → $target_path"
+        INGESTED=$((INGESTED + 1))
+        INGESTED_NAMES+=("$meeting_name")
+
+        # --- Person stub creation and attendee wiki-linking ---
+        # Derive the meeting filename for wiki-links (strip extension from basename)
+        meeting_basename=$(basename "$target_path" .md)
+
+        ATTENDEE_WIKILINKS=()
+        for att_display in "${ATTENDEE_NAMES[@]}"; do
+            # Skip self
+            if [ "$att_display" = "$SELF_NAME" ]; then
+                ATTENDEE_WIKILINKS+=("$att_display")
+                continue
+            fi
+
+            att_kebab=$(kebab_name "$att_display")
+
+            # Check if name already is a wiki-link (plugin may have pre-linked it)
+            # In that case strip_wikilink was already applied, but the raw value had [[...]]
+            # We look for the raw attendee value in the original list to detect this
+            raw_match=""
+            while IFS= read -r raw_val; do
+                stripped=$(strip_wikilink "$raw_val")
+                if [ "$stripped" = "$att_display" ] && echo "$raw_val" | grep -q '\[\['; then
+                    raw_match="$raw_val"
+                    break
+                fi
+            done <<< "$raw_attendees_list"
+
+            # Search for existing person note
+            person_path=$(find_person_note "$att_display" "$att_kebab")
+
+            if [ -n "$person_path" ]; then
+                # Found existing person note — update last_touched if needed
+                update_last_touched "$person_path" "$date"
+                # Extract filename without extension for wiki-link
+                person_basename=$(basename "$person_path" .md)
+                ATTENDEE_WIKILINKS+=("[[${person_basename}|${att_display}]]")
+            elif [ -n "$raw_match" ]; then
+                # Pre-linked by plugin (wiki-link already in source), no stub needed
+                # Extract the existing wiki-link as-is for the section
+                ATTENDEE_WIKILINKS+=("$raw_match")
+            else
+                # No existing person note — create a stub
+                stub_path=$(create_person_stub "$att_display" "$date" "$meeting_name" "$meeting_basename")
+                if [ -n "$stub_path" ]; then
+                    stub_basename=$(basename "$stub_path" .md)
+                    ATTENDEE_WIKILINKS+=("[[${stub_basename}|${att_display}]]")
+                    PERSON_STUBS_CREATED+=("$stub_path")
+                    PERSON_STUBS_NAMES+=("$att_kebab")
+                    echo "    Created person stub: $stub_path"
+                else
+                    # Stub creation failed — use plain name
+                    ATTENDEE_WIKILINKS+=("$att_display")
+                fi
+            fi
+        done
+
+        # Rewrite ## Attendees section with wiki-links
+        if [ ${#ATTENDEE_WIKILINKS[@]} -gt 0 ]; then
+            wikilinks_block=""
+            for wl in "${ATTENDEE_WIKILINKS[@]}"; do
+                wikilinks_block="${wikilinks_block}- ${wl}
+"
+            done
+            # Remove trailing newline
+            wikilinks_block="${wikilinks_block%$'\n'}"
+            rewrite_attendees_section "$target_path" "$wikilinks_block"
+        fi
+    else
+        echo "  Failed: $filename — Obsidian CLI error" >&2
+        echo "  $CLI_OUTPUT" >&2
+    fi
+done
+
+# --- Summary output ---
+if [ "$DRY_RUN" = true ]; then
+    if [ $INGESTED -gt 0 ]; then
+        names_joined=$(IFS=', '; echo "${INGESTED_NAMES[*]}")
+        echo "Would ingest ${INGESTED} meeting(s): ${names_joined}"
+    fi
+    exit 0
+fi
+
+if [ $INGESTED -gt 0 ]; then
+    names_joined=$(IFS=', '; echo "${INGESTED_NAMES[*]}")
+    echo "Ingested ${INGESTED} meeting(s): ${names_joined}"
+fi
+
+if [ ${#PERSON_STUBS_CREATED[@]} -gt 0 ]; then
+    stubs_joined=$(IFS=', '; echo "${PERSON_STUBS_NAMES[*]}")
+    echo "Created ${#PERSON_STUBS_CREATED[@]} person stub(s): ${stubs_joined}"
+fi

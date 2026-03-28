@@ -1,29 +1,14 @@
 # ============================================================
-# Personal Data — notes, context, logs
+# Installer repo gitignore
 # ============================================================
-04 Data/
-05 Meta/context/
-05 Meta/logs/
-Index.md
 
-# ============================================================
-# Credentials & Tokens
-# ============================================================
-.env
-
-# ============================================================
-# Obsidian — all config is regenerable / user-specific
-# ============================================================
-.obsidian/
-
-# ============================================================
-# Claude Code — user-specific local config & memory
-# ============================================================
-.claude/settings.local.json
-
-# ============================================================
 # OS / IDE
-# ============================================================
 .DS_Store
 *.swp
 *~
+
+# Claude Code local settings (user-specific)
+.claude/settings.local.json
+
+# Don't track user memory
+.claude/memory/
