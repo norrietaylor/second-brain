@@ -288,50 +288,12 @@ find "${vault_path}/.claude/skills" -maxdepth 2 -type f ! -name "*.md" -exec chm
 # ── Step 6: Scaffold user files ──────────────────────────────────────
 log_step "Step 6: User configuration"
 
-# Handle priorities for scaffold
+# Set priority vars (picked up by apply_template_file via env)
 export TPL_PRIORITY_1="${TPL_PRIORITY_1:-Define priorities in 05 Meta/context/current-priorities.md}"
 export TPL_PRIORITY_2="${TPL_PRIORITY_2:-}"
 export TPL_PRIORITY_3="${TPL_PRIORITY_3:-}"
 
-# Temporarily add priority vars to the sed in apply_template_file
-# We do this by extending the function for scaffold files
-scaffold_apply() {
-  local src="$1"
-  local dst="$2"
-  sed \
-    -e "s|{{VAULT_NAME}}|${TPL_VAULT_NAME}|g" \
-    -e "s|{{VAULT_PATH}}|${TPL_VAULT_PATH}|g" \
-    -e "s|{{USER_NAME}}|${TPL_USER_NAME}|g" \
-    -e "s|{{USER_FIRST_NAME}}|${TPL_USER_FIRST_NAME}|g" \
-    -e "s|{{USER_ROLE}}|${TPL_USER_ROLE}|g" \
-    -e "s|{{USER_EMAIL}}|${TPL_USER_EMAIL}|g" \
-    -e "s|{{PRIORITY_1}}|${TPL_PRIORITY_1}|g" \
-    -e "s|{{PRIORITY_2}}|${TPL_PRIORITY_2}|g" \
-    -e "s|{{PRIORITY_3}}|${TPL_PRIORITY_3}|g" \
-    "$src" > "$dst"
-}
-
-# Copy scaffold files (only if they don't exist)
-ctx_dir="${vault_path}/05 Meta/context"
-if [[ ! -f "${ctx_dir}/work-profile.md" ]]; then
-  scaffold_apply "${INSTALLER_DIR}/scaffold/context/work-profile.md.tmpl" "${ctx_dir}/work-profile.md"
-  log_success "Created work-profile.md"
-fi
-
-if [[ ! -f "${ctx_dir}/current-priorities.md" ]]; then
-  scaffold_apply "${INSTALLER_DIR}/scaffold/context/current-priorities.md.tmpl" "${ctx_dir}/current-priorities.md"
-  log_success "Created current-priorities.md"
-fi
-
-if [[ ! -f "${vault_path}/.claude/settings.local.json" ]]; then
-  cp "${INSTALLER_DIR}/scaffold/settings.local.json" "${vault_path}/.claude/settings.local.json"
-  log_success "Created settings.local.json"
-fi
-
-if [[ ! -f "${vault_path}/05 Meta/logs/inbox-log.md" ]]; then
-  touch "${vault_path}/05 Meta/logs/inbox-log.md"
-  log_success "Created inbox-log.md"
-fi
+copy_scaffold_files "${INSTALLER_DIR}/scaffold" "$vault_path"
 
 # ── Step 7: Integration setup ────────────────────────────────────────
 log_step "Step 7: Integration setup"

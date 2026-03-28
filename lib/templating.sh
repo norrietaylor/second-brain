@@ -15,6 +15,9 @@ export TPL_USER_NAME="${TPL_USER_NAME:-}"
 export TPL_USER_FIRST_NAME="${TPL_USER_FIRST_NAME:-}"
 export TPL_USER_ROLE="${TPL_USER_ROLE:-}"
 export TPL_USER_EMAIL="${TPL_USER_EMAIL:-}"
+export TPL_PRIORITY_1="${TPL_PRIORITY_1:-}"
+export TPL_PRIORITY_2="${TPL_PRIORITY_2:-}"
+export TPL_PRIORITY_3="${TPL_PRIORITY_3:-}"
 
 # ── Substitution ─────────────────────────────────────────────────────
 
@@ -30,19 +33,33 @@ apply_template() {
   echo "$content"
 }
 
-# Apply template substitution to a file using sed (handles large files)
+# Apply template substitution to a file using Python3 (safe for arbitrary user input)
 apply_template_file() {
   local src="$1"
   local dst="$2"
 
-  sed \
-    -e "s|{{VAULT_NAME}}|${TPL_VAULT_NAME}|g" \
-    -e "s|{{VAULT_PATH}}|${TPL_VAULT_PATH}|g" \
-    -e "s|{{USER_NAME}}|${TPL_USER_NAME}|g" \
-    -e "s|{{USER_FIRST_NAME}}|${TPL_USER_FIRST_NAME}|g" \
-    -e "s|{{USER_ROLE}}|${TPL_USER_ROLE}|g" \
-    -e "s|{{USER_EMAIL}}|${TPL_USER_EMAIL}|g" \
-    "$src" > "$dst"
+  python3 - "$src" "$dst" <<'PYEOF'
+import sys
+import os
+src, dst = sys.argv[1], sys.argv[2]
+with open(src) as f:
+    content = f.read()
+env = os.environ
+for placeholder, var in [
+    ('{{VAULT_NAME}}',       'TPL_VAULT_NAME'),
+    ('{{VAULT_PATH}}',       'TPL_VAULT_PATH'),
+    ('{{USER_NAME}}',        'TPL_USER_NAME'),
+    ('{{USER_FIRST_NAME}}',  'TPL_USER_FIRST_NAME'),
+    ('{{USER_ROLE}}',        'TPL_USER_ROLE'),
+    ('{{USER_EMAIL}}',       'TPL_USER_EMAIL'),
+    ('{{PRIORITY_1}}',       'TPL_PRIORITY_1'),
+    ('{{PRIORITY_2}}',       'TPL_PRIORITY_2'),
+    ('{{PRIORITY_3}}',       'TPL_PRIORITY_3'),
+]:
+    content = content.replace(placeholder, env.get(var, ''))
+with open(dst, 'w') as f:
+    f.write(content)
+PYEOF
 }
 
 # ── File copying ─────────────────────────────────────────────────────

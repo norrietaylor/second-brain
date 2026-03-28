@@ -3,7 +3,7 @@
 Run the vault health check script:
 
 ```bash
-"05 Meta/scripts/sb-verify"
+".claude/scripts/sb-verify"
 ```
 
 The script checks Obsidian access, Bases views, prerequisites, authentication, scripts, and directories. It reads `.sb-installer.json` to only check enabled integrations.

@@ -43,7 +43,15 @@ setup_gitlab() {
   if [[ -n "$gl_host" ]]; then
     local config_script="${vault_dir}/.claude/skills/gl-onmyplate/scripts/config.sh"
     if [[ -f "$config_script" ]]; then
-      sed -i '' "s|GL_HOST=\"\"|GL_HOST=\"${gl_host}\"|" "$config_script"
+      python3 - "$config_script" "$gl_host" <<'PYEOF'
+import sys
+path, host = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    content = f.read()
+content = content.replace('GL_HOST=""', f'GL_HOST="{host}"', 1)
+with open(path, 'w') as f:
+    f.write(content)
+PYEOF
       log_success "GitLab host set to ${gl_host}"
     fi
   fi

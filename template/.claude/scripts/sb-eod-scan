@@ -277,10 +277,23 @@ INBOX_LOG_CONTENT=$(cat "$INBOX_LOG_FULL" 2>/dev/null || echo "")
 INBOX_LOG_ENTRIES=$(echo "$INBOX_LOG_CONTENT" | awk 'NR>2 && NF' || true)
 INBOX_LOG_HAS_ENTRIES=$([ -n "$INBOX_LOG_ENTRIES" ] && echo true || echo false)
 
-# Parse confidence threshold
-CONFIDENCE_THRESHOLD=$(echo "$CONFIG_CONTENT" | \
-  grep -E "^\s+threshold:" | awk '{print $2}' | head -1 || echo "0.6")
-CONFIDENCE_THRESHOLD="${CONFIDENCE_THRESHOLD:-0.6}"
+# Parse confidence threshold (classification.confidence_threshold)
+CONFIDENCE_THRESHOLD=$(python3 - "$CONFIG_PATH" <<'PYEOF' 2>/dev/null || echo "0.6"
+import sys, yaml
+try:
+    with open(sys.argv[1]) as f:
+        cfg = yaml.safe_load(f) or {}
+    ct = None
+    classification = cfg.get("classification") or {}
+    if isinstance(classification, dict):
+        ct = classification.get("confidence_threshold")
+    if ct is None:
+        ct = cfg.get("classification.confidence_threshold")
+    print(ct if ct is not None else "0.6")
+except Exception:
+    print("0.6")
+PYEOF
+)
 
 # Parse slack denylist via python3
 SLACK_DENYLIST=$(python3 - <<PYEOF 2>/dev/null || echo "[]"
