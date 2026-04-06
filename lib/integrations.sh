@@ -205,14 +205,14 @@ configure_settings() {
     '"Bash(git status*)"'
     '"Bash(git diff*)"'
     '"Bash(git log*)"'
-    '"Bash(python3 *05 Meta/scripts/*)"'
-    '"Bash(*05 Meta/scripts/sb*)"'
-    '"Bash(*05 Meta/scripts/vault-cleanup*)"'
+    '"Bash(python3 *.claude/scripts/*)"'
+    '"Bash(*.claude/scripts/sb*)"'
+    '"Bash(*.claude/scripts/vault-cleanup*)"'
   )
 
   if echo "$integrations" | grep -q "GitHub"; then
     allow_perms+=(
-      '"Bash(*05 Meta/scripts/gh-fetch*)"'
+      '"Bash(*.claude/scripts/gh-fetch*)"'
       '"Bash(*gh-onmyplate/scripts/*)"'
     )
   fi
@@ -221,14 +221,14 @@ configure_settings() {
   fi
   if echo "$integrations" | grep -q "Granola"; then
     allow_perms+=(
-      '"Bash(*05 Meta/scripts/granola-ingest*)"'
-      '"Bash(*05 Meta/scripts/granola-initial-sync*)"'
+      '"Bash(*.claude/scripts/granola-ingest*)"'
+      '"Bash(*.claude/scripts/granola-initial-sync*)"'
     )
   fi
   if echo "$integrations" | grep -q "Slack"; then
-    allow_perms+=('"Bash(*05 Meta/scripts/slack-my-activity*)"')
+    allow_perms+=('"Bash(*.claude/scripts/slack-my-activity*)"')
   fi
-  allow_perms+=('"Bash(*05 Meta/scripts/sync-memory.sh*)"')
+  allow_perms+=('"Bash(*.claude/scripts/sync-memory.sh*)"')
 
   # Utility commands (read-only / safe)
   allow_perms+=(
@@ -274,7 +274,7 @@ ${allow_json}    ],
         "hooks": [
           {
             "type": "command",
-            "command": "python3 '05 Meta/scripts/calculate_dates.py'"
+            "command": "python3 '.claude/scripts/calculate_dates.py'"
           }
         ]
       }

@@ -66,7 +66,7 @@ If no match, the note is **new** — proceed to Step 3 (Create).
 #### 3a: Fetch full data
 
 ```bash
-"05 Meta/scripts/gh-fetch" "GITHUB_URL"
+".claude/scripts/gh-fetch" "GITHUB_URL"
 ```
 
 Capture the JSON output. This contains:
@@ -184,7 +184,7 @@ Extract from frontmatter:
 #### 4b: Fetch incremental data
 
 ```bash
-"05 Meta/scripts/gh-fetch" "GITHUB_URL" --since "GITHUB_LAST_SYNCED"
+".claude/scripts/gh-fetch" "GITHUB_URL" --since "GITHUB_LAST_SYNCED"
 ```
 
 Check the output:

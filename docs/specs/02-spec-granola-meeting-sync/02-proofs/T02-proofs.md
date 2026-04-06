@@ -7,7 +7,7 @@
 
 ## Implementation
 
-Created `05 Meta/scripts/granola-ingest` — a bash script that:
+Created `.claude/scripts/granola-ingest` — a bash script that:
 
 - Uses `set -euo pipefail` and follows the same style as `sb-ingest`
 - Reads `05 Meta/config.yaml` for `self_name`, `staging_folder`, and `series_overrides`

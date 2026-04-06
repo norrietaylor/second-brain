@@ -24,11 +24,11 @@ Post-launch cleanup for the Granola meeting sync pipeline. Fixes script defaults
 **Functional Requirements:**
 - The default `VAULT` in `granola-ingest` shall be `~/Sites/second-brain/second-brain`
 - The default `VAULT_DIR` in `granola-initial-sync` shall be `~/Sites/second-brain/second-brain`
-- `.claude/settings.json` shall include `Bash(*05 Meta/scripts/granola-ingest*)` and `Bash(*05 Meta/scripts/granola-initial-sync*)` in the allow list
+- `.claude/settings.json` shall include `Bash(*.claude/scripts/granola-ingest*)` and `Bash(*.claude/scripts/granola-initial-sync*)` in the allow list
 
 **Proof Artifacts:**
-- CLI: `grep -c 'Sites/second-brain' "05 Meta/scripts/granola-ingest"` returns 1
-- CLI: `grep -c 'Sites/second-brain' "05 Meta/scripts/granola-initial-sync"` returns 1
+- CLI: `grep -c 'Sites/second-brain' ".claude/scripts/granola-ingest"` returns 1
+- CLI: `grep -c 'Sites/second-brain' ".claude/scripts/granola-initial-sync"` returns 1
 - File: `.claude/settings.json` contains `granola-ingest` and `granola-initial-sync` in allow list
 
 ### Unit 2: Template validation guard
@@ -66,7 +66,7 @@ Post-launch cleanup for the Granola meeting sync pipeline. Fixes script defaults
 - The `from datetime import datetime` import shall remain (no new imports needed for datetime.UTC on Python 3.11+)
 
 **Proof Artifacts:**
-- CLI: `grep -c 'utcnow' "05 Meta/scripts/granola-initial-sync"` returns 0
+- CLI: `grep -c 'utcnow' ".claude/scripts/granola-initial-sync"` returns 0
 - CLI: `python3 -W error::DeprecationWarning -c "from datetime import datetime; datetime.now(datetime.UTC)"` exits 0
 
 ## Non-Goals (Out of Scope)

@@ -7,16 +7,16 @@
       "Bash(git status*)",
       "Bash(git diff*)",
       "Bash(git log*)",
-      "Bash(python3 *05 Meta/scripts/*)",
-      "Bash(*05 Meta/scripts/sb*)",
-      "Bash(*05 Meta/scripts/vault-cleanup*)",
-      "Bash(*05 Meta/scripts/gh-fetch*)",
-      "Bash(*05 Meta/scripts/sync-memory.sh*)",
+      "Bash(python3 *.claude/scripts/*)",
+      "Bash(*.claude/scripts/sb*)",
+      "Bash(*.claude/scripts/vault-cleanup*)",
+      "Bash(*.claude/scripts/gh-fetch*)",
+      "Bash(*.claude/scripts/sync-memory.sh*)",
       "Bash(*gh-onmyplate/scripts/*)",
       "Bash(*gl-onmyplate/scripts/*)",
-      "Bash(*05 Meta/scripts/granola-ingest*)",
-      "Bash(*05 Meta/scripts/granola-initial-sync*)",
-      "Bash(*05 Meta/scripts/slack-my-activity*)",
+      "Bash(*.claude/scripts/granola-ingest*)",
+      "Bash(*.claude/scripts/granola-initial-sync*)",
+      "Bash(*.claude/scripts/slack-my-activity*)",
       "Bash(ls *)",
       "Bash(cat *)",
       "Bash(mkdir -p *)",
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 '05 Meta/scripts/calculate_dates.py'"
+            "command": "python3 '.claude/scripts/calculate_dates.py'"
           }
         ]
       }

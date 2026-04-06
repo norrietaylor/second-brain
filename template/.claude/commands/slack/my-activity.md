@@ -22,9 +22,9 @@ Check if `SLACK_USER_TOKEN` is set in the environment.
 
 **If token is available** — run the script directly:
 ```bash
-"05 Meta/scripts/slack-my-activity" [TARGET_DATE]
+".claude/scripts/slack-my-activity" [TARGET_DATE]
 # or with --json for machine-readable output
-"05 Meta/scripts/slack-my-activity" --json [TARGET_DATE]
+".claude/scripts/slack-my-activity" --json [TARGET_DATE]
 ```
 The script handles fetching, clustering, and formatting. Skip to Step 6.
 
@@ -57,7 +57,7 @@ Convert MCP results to JSON lines and pipe to the script:
 
 ```bash
 echo '{"channel":"#channel-name","channel_id":"C123","ts":1774283074.451769,"text":"message preview"}
-{"channel":"#other","channel_id":"C456","ts":1774284000.0,"text":"another message"}' | "05 Meta/scripts/slack-my-activity" --stdin [TARGET_DATE]
+{"channel":"#other","channel_id":"C456","ts":1774284000.0,"text":"another message"}' | ".claude/scripts/slack-my-activity" --stdin [TARGET_DATE]
 ```
 
 Each line is a JSON object with: `channel`, `channel_id`, `ts` (float), `text`.
@@ -76,7 +76,7 @@ After printing the report, say:
 
 ## Script Details
 
-The script lives at `05 Meta/scripts/slack-my-activity` and supports:
+The script lives at `.claude/scripts/slack-my-activity` and supports:
 - `--json` — output as JSON (for piping to harvest or other tools)
 - `--stdin` — read pre-fetched messages as JSON lines (for MCP fallback mode)
 - `--session-gap N` — override the 15-minute session gap threshold

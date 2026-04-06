@@ -18,7 +18,7 @@ Update default VAULT path in granola-ingest and granola-initial-sync from ~/Docu
 ### 3. Settings Allow List Update (T01-03-settings-allow-list.txt)
 - **Type**: file verification
 - **Status**: PASS
-- **Evidence**: Both `Bash(*05 Meta/scripts/granola-ingest*)` and `Bash(*05 Meta/scripts/granola-initial-sync*)` entries added to `.claude/settings.json` allow list
+- **Evidence**: Both `Bash(*.claude/scripts/granola-ingest*)` and `Bash(*.claude/scripts/granola-initial-sync*)` entries added to `.claude/settings.json` allow list
 
 ### 4. Syntax Validation (T01-04-syntax-check.txt)
 - **Type**: cli verification

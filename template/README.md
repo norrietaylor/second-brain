@@ -95,7 +95,7 @@ ls -la 05\ Meta/scripts/gh-fetch 05\ Meta/scripts/sb-ingest 05\ Meta/scripts/sla
 ls -d ~/{{VAULT_NAME}}-inbox
 
 # Claude Code session hook works
-python3 '05 Meta/scripts/calculate_dates.py'
+python3 '.claude/scripts/calculate_dates.py'
 
 # Slack API (optional — only if token configured)
 echo $SLACK_USER_TOKEN | head -c 10   # should show "xoxp-..."
@@ -134,12 +134,12 @@ See [CLAUDE.md](CLAUDE.md) for full system documentation: type dispatch, file na
 
 | Script | Purpose | Usage |
 |---|---|---|
-| `05 Meta/scripts/gh-fetch` | Fetch GitHub issue/PR data as JSON | `gh-fetch <url> [--since <ISO-date>]` |
-| `05 Meta/scripts/sb-ingest` | Import files from `~/{{VAULT_NAME}}-inbox/` drop folder | `sb-ingest [--dry-run]` |
-| `05 Meta/scripts/calculate_dates.py` | Date utility (runs on session start via hook) | Auto-invoked |
-| `05 Meta/scripts/granola-ingest` | Transform staged Granola notes into meeting notes | `granola-ingest [--dry-run]` |
-| `05 Meta/scripts/slack-my-activity` | Slack activity with session-based time estimates | `slack-my-activity [YYYY-MM-DD] [--json]` |
-| `05 Meta/scripts/sync-memory.sh` | Sync Claude memory files | Manual |
+| `.claude/scripts/gh-fetch` | Fetch GitHub issue/PR data as JSON | `gh-fetch <url> [--since <ISO-date>]` |
+| `.claude/scripts/sb-ingest` | Import files from `~/{{VAULT_NAME}}-inbox/` drop folder | `sb-ingest [--dry-run]` |
+| `.claude/scripts/calculate_dates.py` | Date utility (runs on session start via hook) | Auto-invoked |
+| `.claude/scripts/granola-ingest` | Transform staged Granola notes into meeting notes | `granola-ingest [--dry-run]` |
+| `.claude/scripts/slack-my-activity` | Slack activity with session-based time estimates | `slack-my-activity [YYYY-MM-DD] [--json]` |
+| `.claude/scripts/sync-memory.sh` | Sync Claude memory files | Manual |
 
 ### Configuration
 

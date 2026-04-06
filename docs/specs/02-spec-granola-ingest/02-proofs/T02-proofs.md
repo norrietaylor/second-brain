@@ -6,7 +6,7 @@
 
 ### Implementation
 
-Added a startup validation check in `05 Meta/scripts/granola-ingest` that:
+Added a startup validation check in `.claude/scripts/granola-ingest` that:
 
 1. Reads the Granola template file from `05 Meta/templates/Granola.md`
 2. Verifies the template exists
@@ -16,7 +16,7 @@ Added a startup validation check in `05 Meta/scripts/granola-ingest` that:
 
 ### Code Changes
 
-Location: `05 Meta/scripts/granola-ingest` (lines 517-524)
+Location: `.claude/scripts/granola-ingest` (lines 517-524)
 
 ```bash
 # Validate template contains {{granola_id}} placeholder

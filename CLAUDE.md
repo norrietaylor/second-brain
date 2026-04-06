@@ -83,17 +83,38 @@ Disabled integrations exclude files via glob patterns in `copy_template_tree()`.
 3. Add setup function in `lib/integrations.sh`
 4. Add config section in `generate_config()` in `lib/integrations.sh`
 
-## Git-Based Update Strategy
+## Update Strategy
 
-Installed vaults with git use a tracking branch:
+Updates are **one-directional: installer → vault**. The updater never reads changes from the vault back into the installer repo.
 
-- `sb/upstream` — contains only installer-managed files, committed by installer
+### What gets updated
+
+- All files from `template/` are re-applied (with placeholder substitution)
+- `scaffold/` files (user-owned) are **never overwritten** — they are only created on fresh install
+- `configure_settings()` re-generates `settings.json` and Claude sandbox for current integrations
+- `.sb-installer.json` version is bumped
+
+### Git-backed vaults
+
+Vaults with `.git` use a tracking branch strategy:
+
+- `sb/upstream` — installer writes new template files here
 - `main` — user's working branch
 
-On update:
-1. `sb/upstream` gets new template files committed
-2. `main` merges `sb/upstream`
-3. User resolves any conflicts
+Flow:
+1. Stash uncommitted changes if any
+2. Check out `sb/upstream` (create if missing)
+3. Copy new template files (with substitution) to vault
+4. Commit to `sb/upstream`: `sb: update to vX.Y.Z`
+5. Check out `main`, merge `sb/upstream`
+6. If conflicts: report them — user resolves and commits manually
+7. Pop stash
+
+This means user edits to installer-managed files (e.g. a customised slash command) will surface as merge conflicts, which is intentional — the user chooses which version wins.
+
+### Non-git vaults
+
+`copy_template_tree()` overwrites installer-managed files directly. No conflict detection — any local edits to template-sourced files are silently overwritten.
 
 ## Key Conventions
 

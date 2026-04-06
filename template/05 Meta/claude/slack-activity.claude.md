@@ -10,7 +10,7 @@ The system tracks your Slack activity (messages sent, reactions placed) for a gi
 
 | Component | Path | Purpose |
 |-----------|------|---------|
-| Script | `05 Meta/scripts/slack-my-activity` | Core engine — fetches, clusters, estimates, formats |
+| Script | `.claude/scripts/slack-my-activity` | Core engine — fetches, clusters, estimates, formats |
 | Skill | `.claude/commands/slack/my-activity.md` | `/slack:my-activity` command definition |
 | Config | `05 Meta/config.yaml` → `slack.activity` | Tunable session parameters |
 | EOD integration | `.claude/commands/eod.md` Step 5.5d-e | Appends time estimates to daily note |
