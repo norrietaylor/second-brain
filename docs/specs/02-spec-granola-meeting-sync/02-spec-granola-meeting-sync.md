@@ -42,7 +42,7 @@ Automated pipeline that transforms raw Granola meeting notes (synced by the phil
 **Purpose:** Transform staged Granola notes into second-brain meeting notes with proper schema, file naming, and location.
 
 **Functional Requirements:**
-- The system shall provide a script at `05 Meta/scripts/granola-ingest` that processes all `.md` files in the staging folder
+- The system shall provide a script at `.claude/scripts/granola-ingest` that processes all `.md` files in the staging folder
 - The script shall accept `--dry-run` to preview transformations without writing
 - For each staged note, the script shall:
   - Parse frontmatter to extract `granola_id`, `title`, `date`, `start_time`, attendees list, and `granola_url`
@@ -90,7 +90,7 @@ Automated pipeline that transforms raw Granola meeting notes (synced by the phil
 **Functional Requirements:**
 - The system shall add Step 0.75 to `/eod` (after Step 0.5 sb-ingest, before Step 1 inbox processing):
   ```
-  "05 Meta/scripts/granola-ingest"
+  ".claude/scripts/granola-ingest"
   ```
 - Step 0.75 output (ingested count, person stubs) shall be captured in `commit_details`
 - The system shall add `granola_ingest_count` to the Step 0 tracking variables
@@ -122,7 +122,7 @@ Automated pipeline that transforms raw Granola meeting notes (synced by the phil
 
 ## Repository Standards
 
-- Script naming: `granola-ingest` (no extension, executable, in `05 Meta/scripts/`)
+- Script naming: `granola-ingest` (no extension, executable, in `.claude/scripts/`)
 - Script style: bash, `set -euo pipefail`, uses `obsidian` CLI for all vault operations
 - Config: YAML in `05 Meta/config.yaml`
 - Git commit prefix: `sb:`

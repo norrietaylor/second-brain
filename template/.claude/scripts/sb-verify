@@ -156,18 +156,23 @@ check_script() {
   fi
 }
 
-check_script "05 Meta/scripts/sb-ingest"
-check_script "05 Meta/scripts/calculate_dates.py"
-check_script "05 Meta/scripts/sb-verify"
+check_script ".claude/scripts/sb-ingest"
+check_script ".claude/scripts/calculate_dates.py"
+check_script ".claude/scripts/sb-verify"
+check_script ".claude/scripts/sb-eod-scan"
+check_script ".claude/scripts/sb-eod-write"
+check_script ".claude/scripts/sb-today-scan"
 
 if has_integration "GitHub"; then
-  check_script "05 Meta/scripts/gh-fetch"
+  check_script ".claude/scripts/gh-fetch"
+  check_script ".claude/scripts/sb-github-sync"
+  check_script ".claude/scripts/sb-github-process"
 fi
 if has_integration "Slack"; then
-  check_script "05 Meta/scripts/slack-my-activity"
+  check_script ".claude/scripts/slack-my-activity"
 fi
 if has_integration "Granola"; then
-  check_script "05 Meta/scripts/granola-ingest"
+  check_script ".claude/scripts/granola-ingest"
 fi
 
 # ── Step 6: Directories ─────────────────────────────────────────────

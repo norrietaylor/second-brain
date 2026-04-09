@@ -82,7 +82,7 @@ git commit -m "sb: /learned — updated <file1>, <file2>[, created <new-file>]"
 After committing context changes, regenerate the global Claude memory file so vault knowledge is available in all projects:
 
 ```bash
-"05 Meta/scripts/sync-memory.sh"
+".claude/scripts/sync-memory.sh"
 ```
 
 This writes `~/.claude/memory/work-context.md` from the updated `05 Meta/context/` files. Skip this step if no context files were actually changed (nothing new to capture).

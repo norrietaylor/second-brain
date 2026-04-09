@@ -1,11 +1,11 @@
 # T04 Proof Artifacts: Fix datetime.utcnow() Deprecation
 
 ## Task Summary
-Replace all uses of `datetime.utcnow()` with `datetime.now(datetime.UTC)` in `05 Meta/scripts/granola-initial-sync`.
+Replace all uses of `datetime.utcnow()` with `datetime.now(datetime.UTC)` in `.claude/scripts/granola-initial-sync`.
 
 ## Changes Made
 
-### File: 05 Meta/scripts/granola-initial-sync
+### File: .claude/scripts/granola-initial-sync
 
 **Line 28 (Import)**
 - Old: `from datetime import datetime`

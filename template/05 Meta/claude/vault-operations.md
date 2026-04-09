@@ -173,7 +173,7 @@ Key pattern: `obsidian vault={{VAULT_NAME}} <command> [key=value...] [flags]`
 ### Plugins
 
 - **Bases** (core plugin) — Database-like views driven by frontmatter properties
-- **Templater** (community, SilentVoid) — Note templates with dynamic `undefined` fields. Template folder: `05 Meta/templates`. User scripts: `05 Meta/scripts/templater`
+- **Templater** (community, SilentVoid) — Note templates with dynamic `undefined` fields. Template folder: `05 Meta/templates`. User scripts: `.claude/scripts/templater`
 - **Update frontmatter modified date** (community, Alan Grainger) — Auto-updates `modified` field. Format: `YYYY-MM-DD HH:mm`, exclude: `05 Meta`
 
 ## Available Commands
@@ -183,9 +183,9 @@ Key pattern: `obsidian vault={{VAULT_NAME}} <command> [key=value...] [flags]`
 - `/meeting` — Create meeting notes from natural language. See `.claude/commands/meeting.md`
 - `/learned` — Session context capture. See `.claude/commands/learned.md`
 - `/gh-import` — Import or update a GitHub issue/PR. See `.claude/commands/gh-import.md`
-- `sb fix` — Reclassify needs-review items. Requires `obsidian` + `jq`. See `05 Meta/scripts/sb-fix`
-- `sb-ingest` — Import markdown files from `~/{{VAULT_NAME}}-inbox/` drop folder. See `05 Meta/scripts/sb-ingest`
-- `vault-cleanup` — Find and remove erroneous root-level vault files. See `05 Meta/scripts/vault-cleanup`
+- `sb fix` — Reclassify needs-review items. Requires `obsidian` + `jq`. See `.claude/scripts/sb-fix`
+- `sb-ingest` — Import markdown files from `~/{{VAULT_NAME}}-inbox/` drop folder. See `.claude/scripts/sb-ingest`
+- `vault-cleanup` — Find and remove erroneous root-level vault files. See `.claude/scripts/vault-cleanup`
 
 ## Skills
 

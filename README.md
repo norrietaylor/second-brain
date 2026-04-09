@@ -79,7 +79,7 @@ For non-git vaults, `--update` overwrites installer-managed files directly.
 - `.claude/agents/` — automation agents
 - `.claude/settings.json` — permissions and hooks
 - `05 Meta/claude/` — type schemas (`*.claude.md`)
-- `05 Meta/scripts/` — shell scripts (gh-fetch, sb-ingest, granola-ingest, etc.)
+- `.claude/scripts/` — shell scripts (gh-fetch, sb-ingest, granola-ingest, etc.)
 - `05 Meta/templates/` — Templater templates
 - `05 Meta/bases/` — system base views
 - `02 Areas/*.base` — browsing views

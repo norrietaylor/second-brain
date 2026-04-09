@@ -24,7 +24,7 @@ Confirms Step 0 initialization includes `granola_ingest_count = 0`:
 Confirms Step 0.75 exists and calls granola-ingest correctly:
 - **Location:** Lines 53-67 in eod.md
 - **Position:** Between Step 0.5 (Ingest External Inbox) and Step 1 (Process Inbox)
-- **Command:** `"05 Meta/scripts/granola-ingest"` (line 58)
+- **Command:** `".claude/scripts/granola-ingest"` (line 58)
 - **Flags:** NO --dry-run flag present (production mode)
 - **Expected behavior:**
   - Reads staged Granola markdown files from staging folder
