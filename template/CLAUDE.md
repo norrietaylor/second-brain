@@ -14,7 +14,9 @@ An Obsidian vault (`{{VAULT_NAME}}`) functioning as a personal knowledge managem
 ├── Index.md               ← landing page (Today's Note link, Projects embed)
 ├── 01 Projects/           ← Active Projects.base
 ├── 02 Areas/              ← Browsing views (Today, Tasks, People, Meetings, GitHub, Digests, etc.)
-├── 03 Resources/          ← Attachments and embedded data
+├── 03 Resources/          ← Topic-based reference collections (folders by theme)
+│   ├── Resources.base     ← Surfaces all resource notes; views: All, Recently Added, By Topic
+│   └── <Topic>/           ← One folder per area of interest (e.g. AI Tooling/, Leadership/)
 ├── 04 Data/YYYY/MM/       ← ALL notes (single data lake)
 │   └── YYYY.MM.DD-<name>.md
 └── 05 Meta/               ← System files
@@ -110,7 +112,19 @@ These are the primary query surfaces. Use `base:query` to read them:
 | Digests.base | Recent, All | Weekly/monthly digest notes |
 | Meetings.base | All, Today | Meeting notes |
 
+`03 Resources/Resources.base` — All, Recently Added, By Topic views over the `03 Resources/` folder tree.
+
 System bases in `05 Meta/bases/`: Unprocessed Inbox, Dirty Notes, Modified Today.
+
+## Resources Convention
+
+`03 Resources/` holds **topic-based reference collections** — ongoing areas of interest where material is accumulating but hasn't committed to a project.
+
+- **Structure:** One subfolder per topic (e.g. `03 Resources/AI Tooling/`, `03 Resources/Leadership/`)
+- **Contents:** Collected articles, bookmarks, clippings, comparisons, pricing notes — reference material grouped by theme
+- **Not for:** Active project files (`01 Projects/`), standalone deep-dive research (`04 Data/` as `type: reference`), or attachments for specific notes
+- **Filing rule:** When classifying a captured note, if it is a clipping or thematic article and a matching topic folder already exists under `03 Resources/`, file it there instead of as a `type: reference` note in `04 Data/`
+- **Discovery:** Use `Resources.base` → "By Topic" view to browse by subfolder
 
 ## Required Obsidian Plugins
 

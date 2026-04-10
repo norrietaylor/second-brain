@@ -47,7 +47,9 @@ Reclassifying a note = changing one frontmatter field. No file moves needed.
 │   ├── Digests.base           # Weekly/monthly digests
 │   └── GitHub.base            # Tracked GitHub issues and PRs (sub-views: All, Open)
 │
-├── 03 Resources/              # Attachments, images, embedded data
+├── 03 Resources/              # Topic-based reference collections
+│   ├── Resources.base         # All / Recently Added / By Topic views
+│   └── <Topic>/               # One subfolder per area of interest
 │
 ├── 04 Data/                   # ALL data notes — the single data lake (includes digests)
 │   └── YYYY/MM/               # Date-organized: 04 Data/2026/02/

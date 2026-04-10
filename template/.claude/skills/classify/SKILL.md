@@ -37,6 +37,8 @@ Read the raw text and determine the best category:
 | `admin` | Non-actionable logistics, policies (NOT meetings — use `meeting` type) |
 | `reference` | Deep-dive research, technical breakdowns, domain context documents, collected knowledge on a topic |
 
+**Resource routing (before filing as `reference`):** If the content is a collected article, bookmark, clipping, comparison, or thematic note that belongs to an ongoing area of interest, check whether a matching topic folder already exists under `03 Resources/` (e.g. `03 Resources/AI Tooling/`, `03 Resources/Leadership/`). If a relevant topic folder exists, file the note there as a plain markdown file instead of creating a `type: reference` note in `04 Data/`. If no matching topic folder exists and the content is genuinely a standalone deep-dive, proceed with `type: reference` in `04 Data/` as normal.
+
 ### Step 3: Assign Confidence
 
 Rate your classification confidence from 0.0 to 1.0:

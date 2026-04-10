@@ -339,9 +339,10 @@ Query digest and daily notes bases:
 ```bash
 obsidian vault={{VAULT_NAME}} base:query path="02 Areas/Digests.base" format=json
 obsidian vault={{VAULT_NAME}} search 'query="type: dailynote"' path="04 Data" format=json
+obsidian vault={{VAULT_NAME}} base:query path="03 Resources/Resources.base" view="Recently Added" format=json
 ```
 
-Select daily notes for Mon–Sun of this week. Read each to extract `## Day Summary` sections. Generate and create the weekly digest file.
+Select daily notes for Mon–Sun of this week. Read each to extract `## Day Summary` sections. Count notes from the Resources query whose `file.ctime` falls within Mon–Sun of this week (`resources_added_count`). Generate and create the weekly digest file.
 
 **File:** `04 Data/YEAR/MONTH/YYYY.MM.DD-weekly-digest.md`
 
@@ -360,6 +361,16 @@ tags: [digest]
 ```
 
 **Body sections:** Week Summary, Decisions Made, Work Completed, In Progress, Blocked, Thread Lifecycles, Intention vs. Outcome, Correction Analysis, Stale Items, Reflection Prompts.
+
+Include a **Housekeeping** section after Stale Items:
+
+```markdown
+### Housekeeping
+- N inbox items classified this week, M dirty checks (K mismatches)
+- N items added to Resources this week
+```
+
+Omit the Resources line if `resources_added_count` is 0.
 
 Commit:
 ```bash
