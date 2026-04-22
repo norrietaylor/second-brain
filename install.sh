@@ -103,6 +103,50 @@ if [[ "$UPDATE_MODE" == true ]]; then
 
   log_info "Integrations: ${integrations}"
 
+  # ── Offer to add new integrations ────────────────────────────────
+  all_integrations=(
+    "GitHub sync (gh CLI)"
+    "GitLab sync (glab CLI)"
+    "Slack activity tracking"
+    "Granola meeting sync"
+    "Raindrop bookmarks (Make It Rain plugin)"
+    "Git-backed vault"
+  )
+
+  available_to_add=()
+  for opt in "${all_integrations[@]}"; do
+    if ! echo "$integrations" | grep -qF "$opt"; then
+      available_to_add+=("$opt")
+    fi
+  done
+
+  newly_added=""
+  if [[ ${#available_to_add[@]} -gt 0 ]]; then
+    echo ""
+    if prompt_confirm "Add new integrations?"; then
+      added_raw=$(prompt_multi_select \
+        "Select integrations to add (space to select, enter to confirm):" \
+        "${available_to_add[@]}")
+      if [[ -n "$added_raw" ]]; then
+        newly_added=$(echo "$added_raw" | tr '\n' ',' | sed 's/,$//')
+        integrations="${integrations:+${integrations},}${newly_added}"
+        log_info "Adding: ${newly_added}"
+        log_info "Integrations (updated): ${integrations}"
+      fi
+    fi
+  fi
+
+  # Check prerequisites for newly-added integrations
+  if [[ -n "$newly_added" ]]; then
+    prereq_failures=0
+    check_all_prerequisites "$newly_added" || prereq_failures=$?
+    if [[ $prereq_failures -gt 0 ]]; then
+      echo ""
+      log_warn "${prereq_failures} prerequisite(s) not met for new integrations"
+      prompt_confirm "Continue anyway? (some features may not work)" || exit 1
+    fi
+  fi
+
   # Set template variables
   export TPL_VAULT_NAME="$vault_name"
   export TPL_VAULT_PATH="$UPDATE_PATH"
@@ -162,6 +206,12 @@ if [[ "$UPDATE_MODE" == true ]]; then
 
   # Regenerate sandbox + permissions for current integrations
   configure_settings "$UPDATE_PATH" "$integrations" "$vault_name"
+
+  # Run setup and update config.yaml for newly-added integrations
+  if [[ -n "$newly_added" ]]; then
+    run_new_integrations_setup "$UPDATE_PATH" "$newly_added" "${TPL_USER_NAME:-}"
+    generate_config "$UPDATE_PATH" "$integrations"
+  fi
 
   # Update metadata
   write_installer_meta "$UPDATE_PATH" "$vault_name" "$integrations"
