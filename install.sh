@@ -95,6 +95,7 @@ if [[ "$UPDATE_MODE" == true ]]; then
       "GitHub sync (gh CLI)" \
       "GitLab sync (glab CLI)" \
       "Slack activity tracking" \
+      "Notion task tracking" \
       "Granola meeting sync" \
       "Raindrop bookmarks (Make It Rain plugin)" \
       "Git-backed vault")
@@ -108,6 +109,7 @@ if [[ "$UPDATE_MODE" == true ]]; then
     "GitHub sync (gh CLI)"
     "GitLab sync (glab CLI)"
     "Slack activity tracking"
+    "Notion task tracking"
     "Granola meeting sync"
     "Raindrop bookmarks (Make It Rain plugin)"
     "Git-backed vault"
@@ -272,6 +274,7 @@ integrations_raw=$(prompt_multi_select \
   "GitHub sync (gh CLI)" \
   "GitLab sync (glab CLI)" \
   "Slack activity tracking" \
+  "Notion task tracking" \
   "Granola meeting sync" \
   "Raindrop bookmarks (Make It Rain plugin)" \
   "Git-backed vault")

@@ -125,6 +125,9 @@ copy_template_tree() {
   if ! echo "$integrations" | grep -q "Slack"; then
     excludes+=("*slack-my-activity*" "*slack-activity.claude.md" "*my-activity.md")
   fi
+  if ! echo "$integrations" | grep -q "Notion"; then
+    excludes+=("*notion-onmyplate*" "*notion-import*" "*Notion.base" "*notion.claude.md")
+  fi
   if ! echo "$integrations" | grep -q "Granola"; then
     excludes+=("*granola*" "*Granola*")
   fi
