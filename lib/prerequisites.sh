@@ -151,6 +151,11 @@ check_all_prerequisites() {
     check_git || ((failures++))
   fi
 
+  if echo "$integrations" | grep -q "Google Workspace"; then
+    log_info "Google Workspace uses claude.ai-hosted MCP — no CLI needed."
+    log_info "Verify the Gmail, Google Calendar, and Google Drive connectors are enabled in claude.ai."
+  fi
+
   return $failures
 }
 

@@ -108,6 +108,38 @@ setup_notion() {
   fi
 }
 
+setup_google_workspace() {
+  local vault_dir="$1"
+
+  log_step "Google Workspace integration setup"
+
+  log_info "Google Workspace uses the Gmail/Calendar/Drive MCPs already configured in Claude (no CLI needed)."
+  log_info "Verify the Gmail, Google Calendar, and Google Drive connectors are enabled in claude.ai."
+  echo ""
+
+  local vip_raw
+  vip_raw=$(prompt_input "VIP senders" \
+    "Comma-separated email addresses to always surface in 'Needs your reply' (leave empty to configure later)" \
+    "")
+
+  local cal_raw
+  cal_raw=$(prompt_input "Additional calendar IDs" \
+    "Comma-separated non-primary calendar IDs to include in /today agenda (leave empty for primary only)" \
+    "")
+
+  export TPL_GOOGLE_VIP_SENDERS="$vip_raw"
+  export TPL_GOOGLE_CALENDAR_IDS="$cal_raw"
+
+  if [[ -n "$vip_raw" ]]; then
+    log_success "VIP senders: ${vip_raw}"
+  fi
+  if [[ -n "$cal_raw" ]]; then
+    log_success "Extra calendars: ${cal_raw}"
+  else
+    log_info "Using [primary] calendar only — edit 05 Meta/config.yaml later to add more"
+  fi
+}
+
 setup_granola() {
   local vault_dir="$1"
   local user_name="$2"
@@ -213,6 +245,39 @@ EOF
       appended=true
     fi
 
+    if echo "$integrations" | grep -q "Google Workspace" && ! grep -q '^google:' "$config_file"; then
+      local google_vip_yaml google_cal_yaml
+      google_vip_yaml=$(_google_list_yaml "${TPL_GOOGLE_VIP_SENDERS:-}")
+      google_cal_yaml=$(_google_list_yaml "${TPL_GOOGLE_CALENDAR_IDS:-}" "primary")
+      cat >> "$config_file" <<EOF
+
+google:
+  self_name: "${TPL_USER_NAME}"
+  self_email: "${TPL_USER_EMAIL}"
+  gmail:
+    denylist_labels:
+      - CATEGORY_PROMOTIONS
+      - CATEGORY_SOCIAL
+      - CATEGORY_UPDATES
+      - SPAM
+    vip_senders:${google_vip_yaml}
+    lookback_days: 3
+    follow_up_wait_days: 3
+  calendar:
+    calendar_ids:${google_cal_yaml}
+    agenda_days_ahead: 2
+  gemini:
+    sender_patterns:
+      - "meetings-noreply@google.com"
+      - "noreply@google.com"
+    subject_patterns:
+      - "took notes"
+      - "Notes by Gemini"
+    series_overrides: {}
+EOF
+      appended=true
+    fi
+
     if [[ "$appended" == true ]]; then
       log_success "Appended new integration sections to config.yaml"
     else
@@ -273,6 +338,39 @@ notion:
 EOF
   fi
 
+  # Google Workspace section
+  if echo "$integrations" | grep -q "Google Workspace"; then
+    local google_vip_yaml google_cal_yaml
+    google_vip_yaml=$(_google_list_yaml "${TPL_GOOGLE_VIP_SENDERS:-}")
+    google_cal_yaml=$(_google_list_yaml "${TPL_GOOGLE_CALENDAR_IDS:-}" "primary")
+    cat >> "$config_file" <<EOF
+
+google:
+  self_name: "${TPL_USER_NAME}"
+  self_email: "${TPL_USER_EMAIL}"
+  gmail:
+    denylist_labels:
+      - CATEGORY_PROMOTIONS
+      - CATEGORY_SOCIAL
+      - CATEGORY_UPDATES
+      - SPAM
+    vip_senders:${google_vip_yaml}
+    lookback_days: 3
+    follow_up_wait_days: 3
+  calendar:
+    calendar_ids:${google_cal_yaml}
+    agenda_days_ahead: 2
+  gemini:
+    sender_patterns:
+      - "meetings-noreply@google.com"
+      - "noreply@google.com"
+    subject_patterns:
+      - "took notes"
+      - "Notes by Gemini"
+    series_overrides: {}
+EOF
+  fi
+
   log_success "Generated config.yaml"
 }
 
@@ -293,6 +391,34 @@ _notion_databases_yaml() {
     [[ -z "$id" ]] && continue
     out="${out}
     - \"${id}\""
+  done
+  echo "$out"
+}
+
+# Render a YAML list from a comma-separated value, quoting each entry.
+# Arg 1: csv (may be empty)
+# Arg 2: default single entry to render when csv is empty (optional; if omitted, renders " []")
+# Indents entries by 6 spaces to fit nested under `gmail:` / `calendar:` blocks.
+_google_list_yaml() {
+  local csv="$1"
+  local default="${2:-}"
+  if [[ -z "$csv" ]]; then
+    if [[ -z "$default" ]]; then
+      echo " []"
+    else
+      echo "
+      - \"${default}\""
+    fi
+    return
+  fi
+  local out=""
+  local IFS=','
+  for v in $csv; do
+    v="${v## }"
+    v="${v%% }"
+    [[ -z "$v" ]] && continue
+    out="${out}
+      - \"${v}\""
   done
   echo "$out"
 }
@@ -417,6 +543,10 @@ run_integration_setup() {
     setup_notion "$vault_dir"
   fi
 
+  if echo "$integrations" | grep -q "Google Workspace"; then
+    setup_google_workspace "$vault_dir"
+  fi
+
   if echo "$integrations" | grep -q "Granola"; then
     setup_granola "$vault_dir" "$user_name"
   fi
@@ -451,6 +581,9 @@ run_new_integrations_setup() {
   fi
   if echo "$newly_added" | grep -q "Notion"; then
     setup_notion "$vault_dir"
+  fi
+  if echo "$newly_added" | grep -q "Google Workspace"; then
+    setup_google_workspace "$vault_dir"
   fi
   if echo "$newly_added" | grep -q "Granola"; then
     setup_granola "$vault_dir" "$user_name"
