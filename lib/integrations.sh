@@ -86,6 +86,28 @@ setup_slack() {
   fi
 }
 
+setup_notion() {
+  local vault_dir="$1"
+
+  log_step "Notion integration setup"
+
+  log_info "Notion uses the Notion MCP already configured in Claude (no CLI needed)."
+  echo ""
+
+  local db_ids
+  db_ids=$(prompt_input "Task database IDs" \
+    "Comma-separated Notion database IDs that contain tasks (leave empty to configure later)" \
+    "")
+
+  export TPL_NOTION_TASK_DATABASES="$db_ids"
+
+  if [[ -n "$db_ids" ]]; then
+    log_success "Notion task databases: ${db_ids}"
+  else
+    log_info "No databases configured — edit 05 Meta/config.yaml later to add them"
+  fi
+}
+
 setup_granola() {
   local vault_dir="$1"
   local user_name="$2"
@@ -177,6 +199,20 @@ EOF
       appended=true
     fi
 
+    if echo "$integrations" | grep -q "Notion" && ! grep -q '^notion:' "$config_file"; then
+      local notion_dbs_yaml
+      notion_dbs_yaml=$(_notion_databases_yaml "${TPL_NOTION_TASK_DATABASES:-}")
+      cat >> "$config_file" <<EOF
+
+notion:
+  self_name: "${TPL_USER_NAME}"
+  task_databases:${notion_dbs_yaml}
+  mention_lookback_days: 7
+  follow_up_wait_days: 3
+EOF
+      appended=true
+    fi
+
     if [[ "$appended" == true ]]; then
       log_success "Appended new integration sections to config.yaml"
     else
@@ -223,7 +259,42 @@ granola:
 EOF
   fi
 
+  # Notion section
+  if echo "$integrations" | grep -q "Notion"; then
+    local notion_dbs_yaml
+    notion_dbs_yaml=$(_notion_databases_yaml "${TPL_NOTION_TASK_DATABASES:-}")
+    cat >> "$config_file" <<EOF
+
+notion:
+  self_name: "${TPL_USER_NAME}"
+  task_databases:${notion_dbs_yaml}
+  mention_lookback_days: 7
+  follow_up_wait_days: 3
+EOF
+  fi
+
   log_success "Generated config.yaml"
+}
+
+# Render the task_databases YAML value.
+# Empty input -> " []" (inline empty list).
+# Non-empty -> newline-separated list items.
+_notion_databases_yaml() {
+  local csv="$1"
+  if [[ -z "$csv" ]]; then
+    echo " []"
+    return
+  fi
+  local out=""
+  local IFS=','
+  for id in $csv; do
+    id="${id## }"
+    id="${id%% }"
+    [[ -z "$id" ]] && continue
+    out="${out}
+    - \"${id}\""
+  done
+  echo "$out"
 }
 
 # ── Settings configuration ────────────────────────────────────────────
@@ -342,6 +413,10 @@ run_integration_setup() {
     setup_slack "$vault_dir"
   fi
 
+  if echo "$integrations" | grep -q "Notion"; then
+    setup_notion "$vault_dir"
+  fi
+
   if echo "$integrations" | grep -q "Granola"; then
     setup_granola "$vault_dir" "$user_name"
   fi
@@ -373,6 +448,9 @@ run_new_integrations_setup() {
   fi
   if echo "$newly_added" | grep -q "Slack"; then
     setup_slack "$vault_dir"
+  fi
+  if echo "$newly_added" | grep -q "Notion"; then
+    setup_notion "$vault_dir"
   fi
   if echo "$newly_added" | grep -q "Granola"; then
     setup_granola "$vault_dir" "$user_name"

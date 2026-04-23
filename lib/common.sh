@@ -101,7 +101,7 @@ run_with_spinner() {
 }
 
 # ── Installer metadata ──────────────────────────────────────────────
-INSTALLER_VERSION="1.1.0"
+INSTALLER_VERSION="1.2.0"
 
 # Get the directory where the installer repo lives
 installer_dir() {

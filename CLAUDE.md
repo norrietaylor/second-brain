@@ -71,6 +71,7 @@ Each integration is a named feature the user selects during install:
 | `GitHub sync` | gh-onmyplate skill, gh-fetch script, gh-import command, GitHub.base |
 | `GitLab sync` | gl-onmyplate skill |
 | `Slack activity tracking` | slack-my-activity script, slack command |
+| `Notion task tracking` | notion-onmyplate skill, notion-import command, Notion.base, notion.claude.md (MCP-based, no CLI) |
 | `Granola meeting sync` | granola scripts, Granola.md template |
 | `Git-backed vault` | .gitignore, git init, sb/upstream branch |
 

@@ -1,0 +1,52 @@
+filters: type == "notion"
+views:
+  - type: table
+    name: All
+    order:
+      - file.name
+      - notion_title
+      - notion_type
+      - notion_status
+      - notion_assignee
+      - notion_due
+      - notion_last_edited
+    sort:
+      - property: notion_last_edited
+        direction: DESC
+  - type: table
+    name: Assigned to me
+    filters: notion_assignee.contains(this.self_name) || notion_assignee == this.self_name
+    order:
+      - file.name
+      - notion_title
+      - notion_status
+      - notion_due
+      - notion_last_edited
+    sort:
+      - property: notion_due
+        direction: ASC
+  - type: table
+    name: Waiting on others
+    filters: notion_waiting_on != null && notion_waiting_on != ""
+    order:
+      - file.name
+      - notion_title
+      - notion_waiting_on
+      - notion_status
+      - notion_due
+      - notion_last_edited
+    sort:
+      - property: notion_last_edited
+        direction: DESC
+  - type: table
+    name: Open
+    filters: notion_status != "Done" && notion_status != "Archived"
+    order:
+      - file.name
+      - notion_title
+      - notion_status
+      - notion_assignee
+      - notion_due
+    sort:
+      - property: notion_due
+        direction: ASC

@@ -9,7 +9,7 @@ This repo is **not** the vault itself — it's the installer. Running `install.s
 - **Type-dispatched notes** — every note has a `type` frontmatter field (person, project, task, meeting, etc.) with enforced schemas
 - **Live database views** — Obsidian Bases files that query notes by frontmatter properties
 - **AI-powered daily workflows** — Claude Code slash commands for morning briefings (`/today`), end-of-day processing (`/eod`), meeting capture (`/meeting`), and more
-- **Configurable integrations** — GitHub, GitLab, Slack, and Granola meeting sync
+- **Configurable integrations** — GitHub, GitLab, Slack, Notion, and Granola meeting sync
 
 ## Prerequisites
 
@@ -48,6 +48,7 @@ The interactive installer will prompt for:
    - GitHub sync (issue/PR tracking, notifications)
    - GitLab sync (MR/issue tracking, todos)
    - Slack activity tracking (time estimates for Harvest)
+   - Notion task tracking (tasks, mentions, follow-ups — via Notion MCP)
    - Granola meeting sync (transcription)
    - Git-backed vault (version control with update support)
 4. **Your profile** — name, role, email (used in meeting notes and config)
@@ -88,7 +89,7 @@ For non-git vaults, `--update` overwrites installer-managed files directly.
 
 ### User-owned files (created once, never overwritten)
 
-- `05 Meta/config.yaml` — classification, Slack, and Granola settings
+- `05 Meta/config.yaml` — classification, Slack, Notion, and Granola settings
 - `05 Meta/context/` — work profile, priorities
 - `05 Meta/logs/` — classification audit trail
 - `04 Data/` — all your notes
@@ -104,6 +105,7 @@ See the installed vault's `CLAUDE.md` for full documentation on:
 - GitHub/GitLab sync architecture
 - Granola meeting sync
 - Slack activity tracking
+- Notion task tracking
 
 ## Development
 

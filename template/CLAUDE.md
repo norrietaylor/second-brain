@@ -31,7 +31,7 @@ An Obsidian vault (`{{VAULT_NAME}}`) functioning as a personal knowledge managem
 
 Every note has a `type` frontmatter field. To understand a note's schema, conventions, and required fields, read the corresponding file at `05 Meta/claude/<type>.claude.md`.
 
-Available types: `person`, `project`, `task`, `idea`, `admin`, `reference`, `meeting`, `inbox`, `digest`, `dailynote`, `github`
+Available types: `person`, `project`, `task`, `idea`, `admin`, `reference`, `meeting`, `inbox`, `digest`, `dailynote`, `github`, `notion`
 
 All notes live in `04 Data/YYYY/MM/` regardless of type. The `02 Areas/*.base` files are Obsidian Bases views that query notes by frontmatter properties — they are live database views, not storage.
 
@@ -83,6 +83,7 @@ Slash commands are defined in `.claude/commands/<name>.md`:
 | `/meeting` | Create meeting note from natural language | Light |
 | `/learned` | End-of-session context capture | Light |
 | `/gh-import` | Import or update a single GitHub issue/PR | Medium |
+| `/notion-import` | Import or update a single Notion page (via Notion MCP) | Medium |
 | `/generate-digests` | Backfill missing digests for date range | Heavy |
 | `/slack:my-activity` | Slack activity report with time estimates per channel | Medium |
 
@@ -107,6 +108,7 @@ These are the primary query surfaces. Use `base:query` to read them:
 | Tasks.base | (default) | All open tasks sorted by due date |
 | People.base | With Follow-ups | People with pending follow-ups |
 | GitHub.base | (default) | All tracked GitHub issues/PRs |
+| Notion.base | All, Assigned to me, Waiting on others, Open | Tracked Notion pages/tasks |
 | Digests.base | Recent, All | Weekly/monthly digest notes |
 | Meetings.base | All, Today | Meeting notes |
 
@@ -305,3 +307,29 @@ CLI flags `--session-gap` and `--single-msg-time` override for a single run.
 - **Huddles**: Not accessible via Slack API. No endpoint exposes huddle participation or duration. Use Granola for meeting capture if running during huddles.
 - **Read-only channels**: Only channels where you posted or reacted are tracked. Passive reading is invisible to the API.
 - **MCP mode**: No reactions data, slower pagination, but works without any setup.
+
+## Notion Task Tracking
+
+Tracks tasks assigned to the user, pages where the user is mentioned, and items the user is waiting on from others. All Notion access goes through the **Notion MCP** (`mcp__claude_ai_Notion__notion-*` tools) — there is no CLI equivalent.
+
+Two surfaces:
+
+- `/notion-import <url>` — Import or update a single Notion page as a `type: notion` note in the vault (see `05 Meta/claude/notion.claude.md`).
+- `notion-onmyplate` skill — Triages three buckets: *assigned to me*, *mentioned / follow-ups*, *waiting on others*. Invoked when the user asks "what's on my Notion plate?" or similar.
+
+### Configuration (`05 Meta/config.yaml`)
+
+```yaml
+notion:
+  self_name: "Your Name"       # used to match Notion user on mentions/assignees
+  task_databases:              # Notion database IDs that contain your tasks
+    - "abc123..."
+  mention_lookback_days: 7
+  follow_up_wait_days: 3       # items waiting on others for N+ days are flagged
+```
+
+To find a database ID: open the database in Notion → share → copy link → the 32-char hex string in the URL is the ID.
+
+### Vault Storage
+
+Each imported Notion page becomes a `type: notion` note in `04 Data/YYYY/MM/` with the alias `notion-<slug>`. Notes have three sections: static title/info line, user-owned `## My Notes`, and append-only `## Activity Summaries`. See `05 Meta/claude/notion.claude.md` for full schema.

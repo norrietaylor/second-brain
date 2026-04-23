@@ -141,6 +141,68 @@ Save `GITHUB_RESULT` for use in Step 4. Do **not** run any additional `gh-fetch`
 ```
 Rules: omit empty sub-sections, checkboxes for actionable items only, items without vault_note use markdown URL only.
 
+### Step 2.6: Notion Sync (MCP-based, skip if not configured)
+
+**Skip this step entirely** if `05 Meta/config.yaml` has no `notion:` section — the integration is off.
+
+Otherwise, follow `.claude/skills/notion-onmyplate/SKILL.md` to query three buckets via the Notion MCP (`mcp__claude_ai_Notion__notion-*`). Read the config once:
+
+```yaml
+notion:
+  self_name: "..."
+  task_databases: [<id>, ...]
+  mention_lookback_days: 7
+  follow_up_wait_days: 3
+```
+
+Resolve the user's Notion user ID once via `mcp__claude_ai_Notion__notion-get-users` (cache for the run).
+
+For each bucket:
+
+1. **Assigned to me** — For each database in `task_databases`, fetch items where the assignee property contains the user's Notion user ID and status is not terminal (Done/Archived/similar). Capture: `id`, `url`, `title`, `status`, `due`, `last_edited_time`, `database_name`.
+
+2. **Mentioned (last N days)** — `notion-search` with the user's name. Filter to `last_edited_time` within `mention_lookback_days`. Dedup against bucket 1. For each, peek at the fetched page to record a one-sentence snippet of context near the mention.
+
+3. **Waiting on others (idle ≥N days)** — For each database, find items where the user is creator/owner but the assignee or `Waiting on` property points elsewhere, AND `last_edited_time` is older than `follow_up_wait_days` days. Capture waiting-on name and days-idle.
+
+Cross-reference with `02 Areas/Notion.base`:
+
+```bash
+obsidian vault={{VAULT_NAME}} base:query path="02 Areas/Notion.base" format=json
+```
+
+For each bucketed item, match by `notion_id` to set `vault_note` / `vault_alias` (or leave empty if no vault note exists).
+
+Save the aggregated result as `NOTION_RESULT`:
+
+```json
+{
+  "assigned": [{"title":"...","url":"...","status":"...","due":"YYYY-MM-DD","database_name":"...","vault_note":"YYYY.MM.DD-notion-slug","vault_alias":"notion-slug","overdue":false}],
+  "mentioned": [{"title":"...","url":"...","mentioned_by":"@who","snippet":"...","vault_note":"...","vault_alias":"..."}],
+  "waiting_on": [{"title":"...","url":"...","waiting_on":"@who","days_idle":N,"vault_note":"...","vault_alias":"..."}],
+  "stats": {"assigned":N,"mentioned":N,"waiting_on":N,"overdue":N}
+}
+```
+
+**Do NOT auto-create vault notes** for Notion items during `/today`. The user can run `/notion-import <url>` to persist any they want to track with `## My Notes`. This keeps `/today` fast and avoids noise from short-lived task entries.
+
+**Format the `## Notion` section** for the daily note:
+
+```markdown
+## Notion
+
+### Assigned to me (N, overdue: M)
+- [ ] [**Page title** — Status | Due Mon DD](URL) · [[vault_note|vault_alias]]
+
+### I'm mentioned (N)
+- [ ] [**Page title** — @mentioned_by: snippet](URL) · [[vault_note|vault_alias]]
+
+### Waiting on others (N)
+- [**Page title** — waiting on @waiting_on (N days)](URL) · [[vault_note|vault_alias]]
+```
+
+Rules: omit empty sub-sections. Overdue items first in "Assigned to me" (sorted by due date ascending). Items without a `vault_note` drop the trailing `· [[...]]`. Omit the `| Due …` part if no due date.
+
 ### Step 3: Check for Recent Digests
 
 From the `bases.digests` data in the scan output, check:
@@ -208,6 +270,15 @@ Daily note: [[YYYY.MM.DD-daily-note]]
 **GitHub — Review Requests (N):**
 - [ ] [**owner/repo#789** — title](URL) · [[YYYY.MM.DD-gh-repo-789|gh-repo-789]]
 
+**Notion — Assigned to me (N, overdue: M):**
+- [ ] [**Page title** — Status | Due Mon DD](URL) · [[YYYY.MM.DD-notion-slug|notion-slug]]
+
+**Notion — Mentioned (N):**
+- [ ] [**Page title** — @mentioned_by: snippet](URL) · [[YYYY.MM.DD-notion-slug|notion-slug]]
+
+**Notion — Waiting on others (N):**
+- [**Page title** — waiting on @who (N days)](URL)
+
 **Raindrop Inbox (N):** N bookmarks waiting for triage
 
 **Needs review (N):** note-name (0.43), other-note (0.51)
@@ -263,6 +334,7 @@ Read `05 Meta/context/current-priorities.md` and rewrite it based on the current
    - Person follow-ups from People.base
    - Unchecked action items from meetings in the last 7 days
    - GitHub threads categorized as "Needs Response" or "Review Requests"
+   - Notion items from `NOTION_RESULT.assigned` that are overdue or due within 3 days, plus `NOTION_RESULT.waiting_on` items idle ≥ `follow_up_wait_days`
    - Remove threads where all related tasks are `status: done`
 
 Keep each thread to one line. Include due dates where relevant. Remove stale items that no longer appear in any active view.
