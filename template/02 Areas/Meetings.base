@@ -24,3 +24,30 @@ views:
     sort:
       - property: date
         direction: ASC
+  - type: table
+    name: By Source
+    order:
+      - file.name
+      - meeting_name
+      - date
+      - source
+      - attendees
+      - summary
+    sort:
+      - property: source
+        direction: ASC
+      - property: date
+        direction: DESC
+  - type: table
+    name: Gemini
+    filters: source == "gemini"
+    order:
+      - file.name
+      - meeting_name
+      - date
+      - attendees
+      - gemini_last_synced
+      - summary
+    sort:
+      - property: date
+        direction: DESC

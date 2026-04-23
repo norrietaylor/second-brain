@@ -9,7 +9,7 @@ This repo is **not** the vault itself — it's the installer. Running `install.s
 - **Type-dispatched notes** — every note has a `type` frontmatter field (person, project, task, meeting, etc.) with enforced schemas
 - **Live database views** — Obsidian Bases files that query notes by frontmatter properties
 - **AI-powered daily workflows** — Claude Code slash commands for morning briefings (`/today`), end-of-day processing (`/eod`), meeting capture (`/meeting`), and more
-- **Configurable integrations** — GitHub, GitLab, Slack, Notion, and Granola meeting sync
+- **Configurable integrations** — GitHub, GitLab, Slack, Notion, Google Workspace, and Granola meeting sync
 
 ## Prerequisites
 
@@ -49,6 +49,7 @@ The interactive installer will prompt for:
    - GitLab sync (MR/issue tracking, todos)
    - Slack activity tracking (time estimates for Harvest)
    - Notion task tracking (tasks, mentions, follow-ups — via Notion MCP)
+   - Google Workspace (Gmail triage, Calendar agenda, Gemini meeting minutes — via Google MCP)
    - Granola meeting sync (transcription)
    - Git-backed vault (version control with update support)
 4. **Your profile** — name, role, email (used in meeting notes and config)
