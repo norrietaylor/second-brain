@@ -141,9 +141,47 @@ generate_config() {
   local integrations="$2"
   local config_file="${vault_dir}/05 Meta/config.yaml"
 
-  # If the config already has real content, don't regenerate
+  # Append-mode: file already populated — only add sections for integrations
+  # whose block is missing (e.g. integration added via `--update`).
   if [[ -f "$config_file" ]] && ! grep -q '{{' "$config_file"; then
-    log_info "config.yaml already configured — skipped"
+    local appended=false
+    if echo "$integrations" | grep -q "Slack" && ! grep -q '^slack:' "$config_file"; then
+      cat >> "$config_file" <<'EOF'
+
+slack:
+  denylist:
+    - random
+    - social
+    - watercooler
+  activity:
+    session_gap_minutes: 15
+    single_msg_minutes: 10
+    reaction_msg_minutes: 5
+    session_buffer_minutes: 5
+    round_to_minutes: 15
+    timezone_offset_hours: -7
+EOF
+      appended=true
+    fi
+
+    if echo "$integrations" | grep -q "Granola" && ! grep -q '^granola:' "$config_file"; then
+      cat >> "$config_file" <<EOF
+
+granola:
+  self_name: "${TPL_USER_NAME}"
+  self_aliases:
+    - "${TPL_USER_FIRST_NAME}"
+  staging_folder: "Granola"
+  series_overrides: {}
+EOF
+      appended=true
+    fi
+
+    if [[ "$appended" == true ]]; then
+      log_success "Appended new integration sections to config.yaml"
+    else
+      log_info "config.yaml already configured — skipped"
+    fi
     return 0
   fi
 
@@ -316,6 +354,31 @@ run_integration_setup() {
 
   # Git must be last (it commits the initial state)
   if echo "$integrations" | grep -q "Git-backed"; then
+    setup_git "$vault_dir" ""
+  fi
+}
+
+# Run per-integration setup for only the newly-added integrations during update.
+# Does NOT regenerate settings.json or config.yaml — the caller handles those.
+run_new_integrations_setup() {
+  local vault_dir="$1"
+  local newly_added="$2"
+  local user_name="$3"
+
+  if echo "$newly_added" | grep -q "GitHub"; then
+    setup_github "$vault_dir"
+  fi
+  if echo "$newly_added" | grep -q "GitLab"; then
+    setup_gitlab "$vault_dir"
+  fi
+  if echo "$newly_added" | grep -q "Slack"; then
+    setup_slack "$vault_dir"
+  fi
+  if echo "$newly_added" | grep -q "Granola"; then
+    setup_granola "$vault_dir" "$user_name"
+  fi
+  # Git last (it commits initial state when initializing a previously-non-git vault)
+  if echo "$newly_added" | grep -q "Git-backed"; then
     setup_git "$vault_dir" ""
   fi
 }

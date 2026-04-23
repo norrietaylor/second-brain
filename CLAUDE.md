@@ -94,6 +94,15 @@ Updates are **one-directional: installer → vault**. The updater never reads ch
 - `configure_settings()` re-generates `settings.json` and Claude sandbox for current integrations
 - `.sb-installer.json` version is bumped
 
+### Adding integrations during update
+
+`./install.sh --update` prompts the user to add integrations that were not selected on the original install. For any that are selected:
+
+- `check_all_prerequisites` runs for just the newly-added integrations (so missing CLIs like `glab` can be brew-installed)
+- `copy_template_tree` and `configure_settings` naturally pick up the expanded list
+- `run_new_integrations_setup` runs the per-integration setup functions for only the new additions (avoids re-prompting Slack mode / GitLab host for already-configured ones)
+- `generate_config` runs in append-only mode: missing sections (e.g. `granola:`) are appended to `config.yaml` without touching existing sections
+
 ### Git-backed vaults
 
 Vaults with `.git` use a tracking branch strategy:
