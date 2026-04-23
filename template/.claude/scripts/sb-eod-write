@@ -58,17 +58,20 @@ fi
 CLASSIFIED_ITEMS=$(echo "$PAYLOAD" | jq -c '.classified_items // []')
 DIRTY_UPDATES=$(echo "$PAYLOAD" | jq -c '.dirty_updates // []')
 MEETING_SUMMARIES=$(echo "$PAYLOAD" | jq -c '.meeting_summaries // []')
+TASK_DONE_ITEMS=$(echo "$PAYLOAD" | jq -c '.task_done_items // []')
 DAILY_NOTE_CONTENT=$(echo "$PAYLOAD" | jq -r '.daily_note_content // ""')
 NAV_LINK_LINE=$(echo "$PAYLOAD" | jq -r '.nav_link_line // ""')
 INBOX_LOG_CLEAR=$(echo "$PAYLOAD" | jq -r '.inbox_log_clear // false')
 DAILY_NOTE_PATH=$(echo "$PAYLOAD" | jq -r '.daily_note_path // ""')
 COMMIT_MESSAGE=$(echo "$PAYLOAD" | jq -r '.commit_message // "sb: /eod — processed"')
+NOW_DT=$(date "+%Y-%m-%d %H:%M")
 
 CLASSIFIED_COUNT=$(echo "$CLASSIFIED_ITEMS" | jq 'length')
 DIRTY_COUNT=$(echo "$DIRTY_UPDATES" | jq 'length')
 MEETING_COUNT=$(echo "$MEETING_SUMMARIES" | jq 'length')
+TASK_DONE_INPUT_COUNT=$(echo "$TASK_DONE_ITEMS" | jq 'length')
 
-echo "sb-eod-write: classified=$CLASSIFIED_COUNT dirty=$DIRTY_COUNT meetings=$MEETING_COUNT" >&2
+echo "sb-eod-write: classified=$CLASSIFIED_COUNT dirty=$DIRTY_COUNT meetings=$MEETING_COUNT tasks_done_input=$TASK_DONE_INPUT_COUNT" >&2
 
 # ---- Step 1: Create new typed notes (parallel) ------------------------------
 
@@ -155,6 +158,45 @@ while IFS= read -r item; do
   ) &
 done < <(echo "$MEETING_SUMMARIES" | jq -c '.[]' 2>/dev/null || true)
 wait
+
+# ---- Step 5: Close completed task notes (sequential — same file guards) -----
+
+echo "Closing completed task notes..." >&2
+
+TASKS_CLOSED=0
+
+while IFS= read -r item; do
+  path=$(echo "$item" | jq -r '.path // ""')
+  [ -z "$path" ] || [ "$path" = "null" ] && continue
+  full_path="${VAULT_PATH}/${path}"
+
+  # File must exist
+  if [ ! -f "$full_path" ]; then
+    echo "  task skip (not found): $path" >&2
+    continue
+  fi
+
+  content=$(cat "$full_path" 2>/dev/null || echo "")
+
+  # Only close notes with type: task
+  if ! echo "$content" | grep -qE "^type:[[:space:]]*task[[:space:]]*$"; then
+    echo "  task skip (not type:task): $path" >&2
+    continue
+  fi
+
+  # Idempotent — skip if already done
+  if echo "$content" | grep -qE "^status:[[:space:]]*done[[:space:]]*$"; then
+    echo "  task skip (already done): $path" >&2
+    continue
+  fi
+
+  obsidian "vault=${VAULT_NAME}" property:set path="$path" name=status value=done silent 2>/dev/null || true
+  obsidian "vault=${VAULT_NAME}" property:set path="$path" name=modified value="$NOW_DT" silent 2>/dev/null || true
+  echo "  task closed: $path" >&2
+  TASKS_CLOSED=$((TASKS_CLOSED + 1))
+done < <(echo "$TASK_DONE_ITEMS" | jq -c '.[]' 2>/dev/null || true)
+
+echo "  Tasks closed: $TASKS_CLOSED" >&2
 
 # ---- Step 6: Clear inbox-log.md (direct file write) -------------------------
 
@@ -263,12 +305,14 @@ jq -n \
   --argjson classified "$CLASSIFIED_COUNT" \
   --argjson dirty "$DIRTY_COUNT" \
   --argjson meetings "$MEETING_COUNT" \
+  --argjson tasks_closed "$TASKS_CLOSED" \
   --arg commit_sha "$COMMIT_SHA" \
   '{
     stats: {
       classified: $classified,
       dirty_updated: $dirty,
-      meetings_summarized: $meetings
+      meetings_summarized: $meetings,
+      tasks_closed: $tasks_closed
     },
     commit_sha: $commit_sha,
     errors: []

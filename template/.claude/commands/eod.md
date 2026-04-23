@@ -235,7 +235,11 @@ In the `## Briefing` section, find any checked `[x]` items that contain a wiki-l
 - Derive the path: `04 Data/YYYY/MM/YYYY.MM.DD-name.md` (parse year/month from the filename date)
 - Add to `task_done_items`: `{ "path": "04 Data/YYYY/MM/YYYY.MM.DD-name.md", "alias": "display-text" }`
 
-Only process items with wiki-links (skip plain-text checkboxes with no note reference). Only process items that are actually checked (`[x]`), not open (`[ ]`).
+For checked `[x]` items with no wiki-link, note them in your internal processing log (e.g. "task done (no link): <text>") and skip — do not add to `task_done_items`.
+
+Only process items that are actually checked (`[x]`), not open (`[ ]`).
+
+`sb-eod-write` handles the actual vault mutations for each item in `task_done_items`: it verifies `type: task`, skips notes already at `status: done` (idempotent), and sets both `status: done` and `modified` to `NOW_DT` for qualifying notes.
 
 **GitHub section — github task notes:**
 
@@ -243,7 +247,9 @@ Find the `## GitHub` section. For each checked `[x]` item in Needs Response or R
 - Extract the GitHub URL
 - Add to `github_done_items`: `{ "github_url": "...", "key": "owner/repo#N" }`
 
-Both lists are processed AFTER `sb-eod-write` runs (fast `obsidian property:set` calls — typically 1-5 items total).
+`github_done_items` are processed AFTER `sb-eod-write` runs (fast `obsidian property:set` calls — typically 1-5 items total).
+
+Track `task_done_count` as the number of items `sb-eod-write` actually closed (from `WRITE_RESULT.stats.tasks_closed`), plus the count of `github_done_items` processed. Include a commit_details line: `closed N tasks from daily note`.
 
 ### Step 5 Write: Apply All Mutations
 
@@ -254,12 +260,13 @@ Build the write payload from Steps 1-5:
   "classified_items": [...],
   "dirty_updates": [...],
   "meeting_summaries": [...],
+  "task_done_items": [...],
   "daily_note_content": "---\n## Day Summary\n...",
   "nav_link_line": "← [[...]] | **date** | [[...]] →",
   "inbox_log_clear": true,
   "daily_note_path": "SCAN.daily_note.path",
-  "commit_message": "sb: /eod — processed N inbox, M dirty checks, S meeting summaries, enriched daily note",
-  "commit_details": ["filed ...", "dirty check: ...", ...]
+  "commit_message": "sb: /eod — processed N inbox, M dirty checks, S meeting summaries, T tasks closed, enriched daily note",
+  "commit_details": ["filed ...", "dirty check: ...", "closed N tasks from daily note", ...]
 }
 ```
 
@@ -269,21 +276,16 @@ Run the write script:
 WRITE_RESULT=$(echo "$WRITE_PAYLOAD" | ".claude/scripts/sb-eod-write")
 ```
 
-The script handles: note creation, inbox deletion, dirty updates, meeting properties, meeting sections, inbox log clear, daily note nav link, daily note Day Summary, and git commit — all in one batch.
+The script handles: note creation, inbox deletion, dirty updates, meeting properties, meeting sections, task completion (status + modified), inbox log clear, daily note nav link, daily note Day Summary, and git commit — all in one batch.
 
 **After write completes:**
-
-If `task_done_items` is non-empty, mark each as done:
-```bash
-obsidian vault={{VAULT_NAME}} property:set path="04 Data/YYYY/MM/YYYY.MM.DD-name.md" name=status value=done
-```
 
 If `github_done_items` is non-empty, mark corresponding task notes as done:
 ```bash
 obsidian vault={{VAULT_NAME}} property:set path="TASK_NOTE_PATH" name=status value=done
 ```
 
-Track `task_done_count` (sum of both lists) for the display output.
+Track `task_done_count` as `WRITE_RESULT.stats.tasks_closed` plus the count of `github_done_items` processed, for the display output.
 
 ### Step 5.5: Slack Activity Summary
 
@@ -437,13 +439,13 @@ After all processing completes, display a brief summary to the terminal:
 - N inbox items classified
 - M dirty checks (K mismatches)
 - S meeting summaries generated
-- T tasks marked done
+- T tasks closed from daily note
 [+ G granola meetings ingested]
 [+ weekly digest generated]
 [+ monthly digest generated]
 [Type mismatches: name (current → suggested), ...]
 ```
 
-Omit the "T tasks marked done" line if `task_done_count` is 0.
+Omit the "T tasks closed from daily note" line if `task_done_count` is 0.
 
 If nothing was processed: "Nothing to process today."
