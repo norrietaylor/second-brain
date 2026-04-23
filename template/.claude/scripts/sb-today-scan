@@ -175,7 +175,7 @@ views:
 TEMPLATE_END
 
   # Substitute placeholders
-  sed "s/__DATE__/$TODAY/g; s/__DOT_DATE__/$DOT_DATE/g; s/__NOW__/$NOW/g; s/__DISPLAY__/$DISPLAY_DATE/g" \
+  sed "s/__DATE__/$TODAY/g; s/__NOW__/$NOW/g; s/__DISPLAY__/$DISPLAY_DATE/g" \
     "$TMPDIR/template.md" > "$TMPDIR/template_final.md"
 
   CONTENT=$(cat "$TMPDIR/template_final.md")
