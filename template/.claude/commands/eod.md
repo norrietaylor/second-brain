@@ -70,10 +70,12 @@ Sweep Gmail for new Gemini-generated meeting-minutes emails and ingest their lin
    - Check whether an existing vault note already has `gemini_thread_id: <id>` OR references the same `gemini_doc_id`. If yes, skip.
    - Otherwise, invoke the `/gemini-import` agent flow with the thread ID as input (delegating to `.claude/agents/gemini-import.md`). The agent resolves the doc link, fetches the doc, and files the note.
 5. Collect the count of successful ingests as `gemini_ingest_count` (also track `gemini_skip_count` for already-ingested threads).
-6. Update `05 Meta/logs/gemini-sweep.json` with the current date as `last_sweep` (overwrite).
+6. **Only if the Gmail search completed** (step 4 ran — including when it returned zero matches): update `05 Meta/logs/gemini-sweep.json` with the current date as `last_sweep` (overwrite). **Do NOT advance `last_sweep` if the Gmail MCP was unavailable or the search failed** — leaving it unchanged keeps the unqueried window in range on the next run, so no Gemini emails are skipped.
 7. Newly-created `type: meeting` notes are picked up automatically by Step 3 (Meeting Summary Generation) and Step 5 (Daily Note enrichment), so no additional plumbing is needed here.
 
-If the Gmail MCP is not available or the search returns zero results, record `gemini_ingest_count = 0` and proceed — this is a no-op, not an error.
+Two distinct no-op cases:
+- **Search ran, zero matches** → record `gemini_ingest_count = 0` and advance `last_sweep` (step 6). Not an error.
+- **Gmail MCP unavailable or search failed** → record `gemini_ingest_count = 0` and **do not advance `last_sweep`**. Retry the window next run.
 
 ### Step 0: Gather All Data
 
