@@ -86,6 +86,7 @@ Slash commands are defined in `.claude/commands/<name>.md`:
 | `/learned` | End-of-session context capture | Light |
 | `/gh-import` | Import or update a single GitHub issue/PR | Medium |
 | `/notion-import` | Import or update a single Notion page (via Notion MCP) | Medium |
+| `/gemini-import` | Ingest a Gemini-generated meeting-minutes Google Doc (via Google MCP) | Medium |
 | `/generate-digests` | Backfill missing digests for date range | Heavy |
 | `/slack:my-activity` | Slack activity report with time estimates per channel | Medium |
 
@@ -112,7 +113,7 @@ These are the primary query surfaces. Use `base:query` to read them:
 | GitHub.base | (default) | All tracked GitHub issues/PRs |
 | Notion.base | All, Assigned to me, Waiting on others, Open | Tracked Notion pages/tasks |
 | Digests.base | Recent, All | Weekly/monthly digest notes |
-| Meetings.base | All, Today | Meeting notes |
+| Meetings.base | All, Today, By Source, Gemini | Meeting notes (manual, granola, gemini) |
 
 `03 Resources/Resources.base` — All, Recently Added, By Topic views over the `03 Resources/` folder tree.
 
@@ -347,3 +348,41 @@ To find a database ID: open the database in Notion → share → copy link → t
 ### Vault Storage
 
 Each imported Notion page becomes a `type: notion` note in `04 Data/YYYY/MM/` with the alias `notion-<slug>`. Notes have three sections: static title/info line, user-owned `## My Notes`, and append-only `## Activity Summaries`. See `05 Meta/claude/notion.claude.md` for full schema.
+
+## Google Workspace
+
+Triages inbox and calendar, and ingests Gemini-generated team meeting minutes into `type: meeting, source: gemini` vault notes. All Google access goes through the **Google Workspace MCPs** (`mcp__claude_ai_Gmail__*`, `mcp__claude_ai_Google_Calendar__*`, `mcp__claude_ai_Google_Drive__*`) — there is no CLI equivalent. **Read-only** for Calendar — this integration never creates, updates, or deletes events.
+
+Three surfaces:
+
+- `gmail-onmyplate` skill — Triages inbox into three buckets: *needs your reply*, *your open threads (awaiting response)*, *FYI (counts per label)*. Invoked on "what's on my gmail plate?", "what's in my inbox?", etc.
+- `gcal-agenda` skill — Lists today + upcoming calendar events with attendees, Meet links, and linked Gemini-notes docs. Cross-references `02 Areas/Meetings.base` to flag events that already have a vault note.
+- `/gemini-import <url-or-thread>` — Ingest a Gemini-generated meeting-minutes Google Doc as a `type: meeting, source: gemini` note. Accepts a Google Doc URL, Doc ID, Gmail thread URL, or bare Gmail thread ID. Re-imports overwrite the Gemini-owned sections but never touch `## Summary` or user-added content.
+
+Automatic sweep: `/eod` Step 0.8 searches Gmail for new Gemini distribution emails since the last sweep and ingests them via the `/gemini-import` flow. The last-sweep timestamp lives at `05 Meta/logs/gemini-sweep.json`.
+
+### Configuration (`05 Meta/config.yaml`)
+
+```yaml
+google:
+  self_name: "Your Name"
+  self_email: "you@company.com"
+  gmail:
+    denylist_labels: [CATEGORY_PROMOTIONS, CATEGORY_SOCIAL, CATEGORY_UPDATES, SPAM]
+    vip_senders: []              # emails to always surface in Needs your reply
+    lookback_days: 3
+    follow_up_wait_days: 3       # stale outbound threads (Bucket 2) older than N days
+  calendar:
+    calendar_ids: [primary]      # add additional calendar IDs to include in agenda
+    agenda_days_ahead: 2         # 0 = today only, 1 = today + tomorrow, etc.
+  gemini:
+    sender_patterns: ["meetings-noreply@google.com", "noreply@google.com"]
+    subject_patterns: ["took notes", "Notes by Gemini"]
+    series_overrides: {}         # map exact Gemini doc titles → kebab meeting_name
+```
+
+### Vault Storage
+
+Gemini-sourced meetings become `type: meeting` notes in `04 Data/YYYY/MM/` with `source: gemini` and `gemini_doc_id` as the dedup key. They appear in `02 Areas/Meetings.base` alongside manual and Granola-sourced meetings (see the *Gemini* and *By Source* views). See `05 Meta/claude/meeting.claude.md` for the full schema and the source-specific layout rules.
+
+Gmail and Calendar are **not persisted** to the vault — the skills are read-only triage surfaces.

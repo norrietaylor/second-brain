@@ -52,6 +52,29 @@ Capture the script's output (number of meetings ingested) and store as `granola_
 
 If the staging folder is empty or doesn't exist, this is a no-op.
 
+### Step 0.8: Ingest Gemini Meetings
+
+Sweep Gmail for new Gemini-generated meeting-minutes emails and ingest their linked Google Docs as `type: meeting, source: gemini` notes.
+
+**Skip this step entirely** if the Google Workspace integration is not enabled (i.e. `google:` block is absent from `05 Meta/config.yaml`).
+
+1. Read `05 Meta/config.yaml` — pick up `google.gemini.sender_patterns`, `google.gemini.subject_patterns`, and `google.gemini.series_overrides`.
+2. Read the last-sweep timestamp from `05 Meta/logs/gemini-sweep.json` (format: `{"last_sweep": "YYYY-MM-DD"}`). If the file does not exist, default to 7 days ago.
+3. Build a Gmail search query using `google.gemini.sender_patterns` and `subject_patterns`, bounded by `after:<last_sweep>`:
+
+   ```
+   from:(meetings-noreply@google.com OR noreply@google.com) subject:("took notes" OR "Notes by Gemini") after:YYYY/MM/DD
+   ```
+
+4. Call `mcp__claude_ai_Gmail__search_threads` with the query. For each thread ID returned:
+   - Check whether an existing vault note already has `gemini_thread_id: <id>` OR references the same `gemini_doc_id`. If yes, skip.
+   - Otherwise, invoke the `/gemini-import` agent flow with the thread ID as input (delegating to `.claude/agents/gemini-import.md`). The agent resolves the doc link, fetches the doc, and files the note.
+5. Collect the count of successful ingests as `gemini_ingest_count` (also track `gemini_skip_count` for already-ingested threads).
+6. Update `05 Meta/logs/gemini-sweep.json` with the current date as `last_sweep` (overwrite).
+7. Newly-created `type: meeting` notes are picked up automatically by Step 3 (Meeting Summary Generation) and Step 5 (Daily Note enrichment), so no additional plumbing is needed here.
+
+If the Gmail MCP is not available or the search returns zero results, record `gemini_ingest_count = 0` and proceed — this is a no-op, not an error.
+
 ### Step 0: Gather All Data
 
 Run the vault scan script to gather everything needed in one pass:
@@ -441,6 +464,7 @@ After all processing completes, display a brief summary to the terminal:
 - S meeting summaries generated
 - T tasks closed from daily note
 [+ G granola meetings ingested]
+[+ E gemini meetings ingested]
 [+ weekly digest generated]
 [+ monthly digest generated]
 [Type mismatches: name (current → suggested), ...]

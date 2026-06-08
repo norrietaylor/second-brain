@@ -128,6 +128,9 @@ copy_template_tree() {
   if ! echo "$integrations" | grep -q "Notion"; then
     excludes+=("*notion-onmyplate*" "*notion-import*" "*Notion.base" "*notion.claude.md")
   fi
+  if ! echo "$integrations" | grep -q "Google Workspace"; then
+    excludes+=("*gmail-onmyplate*" "*gcal-agenda*" "*gemini-import*")
+  fi
   if ! echo "$integrations" | grep -q "Granola"; then
     excludes+=("*granola*" "*Granola*")
   fi
