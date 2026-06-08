@@ -56,7 +56,8 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$MODE" = "list" ]; then
-    jq -r '.cache.state.transcripts | keys[]' "$CACHE_FILE"
+    # `// {}` keeps `keys[]` from erroring when transcripts is missing/null.
+    jq -r '(.cache.state.transcripts // {}) | keys[]' "$CACHE_FILE"
     exit 0
 fi
 

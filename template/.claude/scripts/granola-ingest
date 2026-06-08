@@ -26,6 +26,17 @@ VAULT="${SECOND_BRAIN_VAULT:-{{VAULT_PATH}}}"
 VAULT_NAME="${SECOND_BRAIN_NAME:-{{VAULT_NAME}}}"
 CONFIG_FILE="$VAULT/05 Meta/config.yaml"
 
+# Portable timeout: stock macOS ships neither `timeout` nor `gtimeout` (the latter
+# comes with coreutils). When neither is present, run the command unwrapped rather
+# than fail — the `| cat |` buffering already mitigates the obsidian SIGPIPE hang.
+if command -v timeout >/dev/null 2>&1; then _TIMEOUT_BIN="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then _TIMEOUT_BIN="gtimeout"
+else _TIMEOUT_BIN=""; fi
+run_timeout() {  # run_timeout <seconds> <cmd...>
+    local secs="$1"; shift
+    if [ -n "$_TIMEOUT_BIN" ]; then "$_TIMEOUT_BIN" "$secs" "$@"; else "$@"; fi
+}
+
 # Helper script that reads transcripts from Granola's local Electron cache
 # (~/Library/Application Support/Granola/cache-v6.json). Optional — absence or
 # failure is non-fatal; the ingest continues without a transcript callout.
@@ -227,7 +238,11 @@ find_by_granola_id() {
     # `granola_id: "<uuid>"` (quoted) while staged files use `granola_id: <uuid>`
     # (unquoted). A bare-string grep misses the quoted form → re-ingests as a
     # ` 1.md` duplicate. The optional `"?` handles both.
-    hit=$(grep -rlE --include="*.md" "granola_id: \"?${granola_id}" "$VAULT/04 Data" 2>/dev/null | head -1)
+    # Anchor + escape the id so a prefix can never false-match a different note
+    # (which would skip ingestion and delete the staged file).
+    local gid_re
+    gid_re=$(printf '%s' "$granola_id" | sed 's/[][(){}.^$*+?|\\/]/\\&/g')
+    hit=$(grep -rlE --include="*.md" "^granola_id:[[:space:]]*\"?${gid_re}\"?[[:space:]]*$" "$VAULT/04 Data" 2>/dev/null | head -1)
     if [ -n "$hit" ]; then
         # Strip leading "$VAULT/" to return a vault-relative path
         echo "${hit#$VAULT/}"
@@ -247,13 +262,13 @@ find_person_note() {
     # piping its output directly to `grep` (which closes the pipe early) hangs
     # obsidian indefinitely. The `cat` buffers; `timeout` is defense-in-depth.
     local candidates
-    candidates=$(timeout 10 obsidian "vault=$VAULT_NAME" search "query=$display_name" path="04 Data" format=json 2>/dev/null \
+    candidates=$(run_timeout 10 obsidian "vault=$VAULT_NAME" search "query=$display_name" path="04 Data" format=json 2>/dev/null \
         | cat \
         | grep -o '"[^"]*\.md"' | sed 's/"//g' || true)
 
     if [ -z "$candidates" ]; then
         # Also try alias search
-        candidates=$(timeout 10 obsidian "vault=$VAULT_NAME" search "query=$kebab" path="04 Data" format=json 2>/dev/null \
+        candidates=$(run_timeout 10 obsidian "vault=$VAULT_NAME" search "query=$kebab" path="04 Data" format=json 2>/dev/null \
             | cat \
             | grep -o '"[^"]*\.md"' | sed 's/"//g' || true)
     fi
