@@ -10,6 +10,7 @@ This repo is **not** the vault itself — it's the installer. Running `install.s
 - **Live database views** — Obsidian Bases files that query notes by frontmatter properties
 - **AI-powered daily workflows** — Claude Code slash commands for morning briefings (`/today`), end-of-day processing (`/eod`), meeting capture (`/meeting`), and more
 - **Configurable integrations** — GitHub, GitLab, Slack, Notion, Google Workspace, and Granola meeting sync
+- **Scheduled daily runs** — optional macOS launchd agents that run `/today` each morning and `/eod` + `/learned` each evening, unattended
 
 ## Prerequisites
 
@@ -51,6 +52,7 @@ The interactive installer will prompt for:
    - Notion task tracking (tasks, mentions, follow-ups — via Notion MCP)
    - Google Workspace (Gmail triage, Calendar agenda, Gemini meeting minutes — via Google MCP)
    - Granola meeting sync (transcription)
+   - Scheduled daily runs (launchd, macOS — unattended `/today` + `/eod`/`/learned`)
    - Git-backed vault (version control with update support)
 4. **Your profile** — name, role, email (used in meeting notes and config)
 
@@ -71,6 +73,35 @@ The updater:
 4. You resolve any conflicts in files you've customized
 
 For non-git vaults, `--update` overwrites installer-managed files directly.
+
+## Scheduled Daily Runs (macOS)
+
+Selecting **Scheduled daily runs** installs two launchd agents that run the vault's workflows unattended:
+
+- `/today` every morning (default 06:00 local)
+- `/eod` + `/learned` every evening (default 19:00 local), chained in one session so `/learned` sees the `/eod` context
+
+The installer prompts for the two hours and runs `claude -p "<cmd>" --dangerously-skip-permissions` (unattended, so no approval prompts; deny rules in `settings.json` are still honored).
+
+**Why the runner scripts live outside the vault:** vaults default to `~/Documents`, which is TCC-protected on macOS. A launchd agent has no privacy grant to read files there, so a wrapper placed in the vault fails with `can't open input file` (exit 127). The installer writes the wrappers to a non-protected location instead and only `cd`s into the vault at run time.
+
+| What | Where |
+|---|---|
+| Runner scripts | `~/Library/Application Support/<vault>-scheduled/run-{today,eod}.sh` |
+| Logs | `~/Library/Logs/<vault>-scheduled/{today,eod}.log` |
+| LaunchAgents | `~/Library/LaunchAgents/dev.secondbrain.<vault>-{today,eod}.plist` |
+
+Manage them:
+
+```bash
+launchctl list | grep secondbrain                                  # confirm loaded
+launchctl kickstart -k gui/$(id -u)/dev.secondbrain.<vault>-today   # run /today now
+launchctl bootout  gui/$(id -u)/dev.secondbrain.<vault>-today       # disable
+```
+
+Re-running `./install.sh --update` regenerates the runners and reloads the agents. macOS only; on Linux the step is skipped (wire the runners into cron or a systemd timer instead).
+
+Headless note: interactively-authenticated claude.ai MCP connectors (Gmail/Notion/Slack/Calendar) may be absent in unattended runs; vault, GitHub, and Granola steps still run.
 
 ## What Gets Installed
 

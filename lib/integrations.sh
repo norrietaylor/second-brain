@@ -557,6 +557,10 @@ run_integration_setup() {
   # Tailor sandbox + permissions to selected integrations
   configure_settings "$vault_dir" "$integrations" "$TPL_VAULT_NAME"
 
+  if echo "$integrations" | grep -q "Scheduled daily"; then
+    setup_scheduling "$vault_dir" "$TPL_VAULT_NAME"
+  fi
+
   # Git must be last (it commits the initial state)
   if echo "$integrations" | grep -q "Git-backed"; then
     setup_git "$vault_dir" ""
@@ -587,6 +591,9 @@ run_new_integrations_setup() {
   fi
   if echo "$newly_added" | grep -q "Granola"; then
     setup_granola "$vault_dir" "$user_name"
+  fi
+  if echo "$newly_added" | grep -q "Scheduled daily"; then
+    setup_scheduling "$vault_dir" "${TPL_VAULT_NAME:-second-brain}"
   fi
   # Git last (it commits initial state when initializing a previously-non-git vault)
   if echo "$newly_added" | grep -q "Git-backed"; then

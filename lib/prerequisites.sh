@@ -151,6 +151,15 @@ check_all_prerequisites() {
     check_git || ((failures++))
   fi
 
+  if echo "$integrations" | grep -q "Scheduled daily"; then
+    # claude is already checked in the always-required block above; the headless
+    # runs invoke `claude -p`. Only the platform constraint is scheduled-specific.
+    if [[ "$(uname)" != "Darwin" ]]; then
+      log_warn "Scheduled daily runs require macOS (launchd) — not available on $(uname)"
+      ((failures++))
+    fi
+  fi
+
   if echo "$integrations" | grep -q "Google Workspace"; then
     log_info "Google Workspace uses claude.ai-hosted MCP — no CLI needed."
     log_info "Verify the Gmail, Google Calendar, and Google Drive connectors are enabled in claude.ai."
