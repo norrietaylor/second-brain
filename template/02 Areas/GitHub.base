@@ -4,21 +4,23 @@ views:
     name: All
     order:
       - file.name
-      - gh_state
-      - gh_title
-      - gh_repo
-      - gh_updated_at
+      - github_state
+      - github_repo
+      - github_number
+      - github_url
+      - github_last_synced
     sort:
-      - property: gh_updated_at
+      - property: github_last_synced
         direction: DESC
   - type: table
     name: Open
-    filters: gh_state == "open"
+    filters: github_state == "open"
     order:
       - file.name
-      - gh_title
-      - gh_repo
-      - gh_updated_at
+      - github_repo
+      - github_number
+      - github_url
+      - github_last_synced
     sort:
-      - property: gh_updated_at
+      - property: github_last_synced
         direction: DESC

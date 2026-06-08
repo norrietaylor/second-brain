@@ -258,7 +258,7 @@ if [ -n "$YESTERDAY_DATE" ] && [ -f "$DAILY_NOTE_FILE" ]; then
   YESTERDAY_FILE="${DATA_DIR}/${YESTERDAY_DATE:0:4}/${YESTERDAY_DATE:5:2}/${YESTERDAY_DOT}-daily-note.md"
   if [ -f "$YESTERDAY_FILE" ] && ! grep -q "Tomorrow" "$YESTERDAY_FILE" 2>/dev/null; then
     if grep -q "^←" "$YESTERDAY_FILE" 2>/dev/null; then
-      sed "s|^\(← .*\)|\1 | [[${DOT_DATE}-daily-note|Tomorrow]] →|" \
+      sed "s#^\(← .*\)#\1 | [[${DOT_DATE}-daily-note|Tomorrow]] →#" \
         "$YESTERDAY_FILE" > "$TMPDIR/nav_yest.md"
       mv "$TMPDIR/nav_yest.md" "$YESTERDAY_FILE"
     fi

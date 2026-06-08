@@ -26,6 +26,22 @@ VAULT="${SECOND_BRAIN_VAULT:-{{VAULT_PATH}}}"
 VAULT_NAME="${SECOND_BRAIN_NAME:-{{VAULT_NAME}}}"
 CONFIG_FILE="$VAULT/05 Meta/config.yaml"
 
+# Portable timeout: stock macOS ships neither `timeout` nor `gtimeout` (the latter
+# comes with coreutils). When neither is present, run the command unwrapped rather
+# than fail — the `| cat |` buffering already mitigates the obsidian SIGPIPE hang.
+if command -v timeout >/dev/null 2>&1; then _TIMEOUT_BIN="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then _TIMEOUT_BIN="gtimeout"
+else _TIMEOUT_BIN=""; fi
+run_timeout() {  # run_timeout <seconds> <cmd...>
+    local secs="$1"; shift
+    if [ -n "$_TIMEOUT_BIN" ]; then "$_TIMEOUT_BIN" "$secs" "$@"; else "$@"; fi
+}
+
+# Helper script that reads transcripts from Granola's local Electron cache
+# (~/Library/Application Support/Granola/cache-v6.json). Optional — absence or
+# failure is non-fatal; the ingest continues without a transcript callout.
+TRANSCRIPT_HELPER="$(dirname "$0")/granola-transcript"
+
 DRY_RUN=false
 if [ "${1:-}" = "--dry-run" ]; then
     DRY_RUN=true
@@ -208,14 +224,29 @@ kebab_name() {
 }
 
 # Check if a vault note with the given granola_id already exists.
-# Returns the path if found, empty string if not.
+# Returns the vault-relative path if found, empty string if not.
+#
+# Uses `grep -rl` directly on the filesystem — `obsidian search` does NOT recognize
+# the `granola_id:` frontmatter operator (known bug), AND piping its output to
+# `grep | head` triggers SIGPIPE on the obsidian CLI which hangs the script
+# indefinitely. Direct grep is fast (~ms per call) and side-steps both problems.
 find_by_granola_id() {
     local granola_id="$1"
-    obsidian "vault=$VAULT_NAME" search "query=granola_id: $granola_id" path="04 Data" format=json 2>/dev/null \
-        | grep -o '"path":"[^"]*"' \
-        | head -1 \
-        | sed 's/"path":"//; s/"//' \
-        || true
+    [ -z "$granola_id" ] && return 0
+    local hit
+    # Match both quoted and unquoted frontmatter forms: ingested notes write
+    # `granola_id: "<uuid>"` (quoted) while staged files use `granola_id: <uuid>`
+    # (unquoted). A bare-string grep misses the quoted form → re-ingests as a
+    # ` 1.md` duplicate. The optional `"?` handles both.
+    # Anchor + escape the id so a prefix can never false-match a different note
+    # (which would skip ingestion and delete the staged file).
+    local gid_re
+    gid_re=$(printf '%s' "$granola_id" | sed 's/[][(){}.^$*+?|\\/]/\\&/g')
+    hit=$(grep -rlE --include="*.md" "^granola_id:[[:space:]]*\"?${gid_re}\"?[[:space:]]*$" "$VAULT/04 Data" 2>/dev/null | head -1)
+    if [ -n "$hit" ]; then
+        # Strip leading "$VAULT/" to return a vault-relative path
+        echo "${hit#$VAULT/}"
+    fi
 }
 
 # Search for an existing person note by name (case-insensitive) or by alias (kebab-case).
@@ -226,14 +257,19 @@ find_person_note() {
     local display_name="$1"
     local kebab="$2"
 
-    # Do a full-text search for the name, then check each candidate's frontmatter
+    # Do a full-text search for the name, then check each candidate's frontmatter.
+    # `timeout 10` + `| cat |` are mitigations for the obsidian CLI's SIGPIPE bug —
+    # piping its output directly to `grep` (which closes the pipe early) hangs
+    # obsidian indefinitely. The `cat` buffers; `timeout` is defense-in-depth.
     local candidates
-    candidates=$(obsidian "vault=$VAULT_NAME" search "query=$display_name" path="04 Data" format=json 2>/dev/null \
+    candidates=$(run_timeout 10 obsidian "vault=$VAULT_NAME" search "query=$display_name" path="04 Data" format=json 2>/dev/null \
+        | cat \
         | grep -o '"[^"]*\.md"' | sed 's/"//g' || true)
 
     if [ -z "$candidates" ]; then
         # Also try alias search
-        candidates=$(obsidian "vault=$VAULT_NAME" search "query=$kebab" path="04 Data" format=json 2>/dev/null \
+        candidates=$(run_timeout 10 obsidian "vault=$VAULT_NAME" search "query=$kebab" path="04 Data" format=json 2>/dev/null \
+            | cat \
             | grep -o '"[^"]*\.md"' | sed 's/"//g' || true)
     fi
 
@@ -369,21 +405,38 @@ new_links   = sys.argv[3]
 with open(input_file, 'r') as f:
     content = f.read()
 
-new_section = '## Attendees\n\n' + new_links + '\n'
+new_section = '## Attendees\n\n' + new_links + '\n\n'
 
-# Replace ## Attendees section (up to next ## heading or end of file)
-pattern = r'## Attendees\n.*?(?=\n## |\Z)'
-new_content = re.sub(pattern, new_section.rstrip('\n'), content, flags=re.DOTALL)
+# Match "## Attendees" heading + the attendee list (list items / blank lines ONLY).
+# CRITICAL: stop at the first non-list, non-blank line so we don't swallow callouts
+# (e.g. "> [!note]- Granola AI Summary") or any subsequent prose. The old DOTALL
+# pattern ran to end-of-file when the note had no later "## " heading, wiping out
+# the AI summary and transcript — a silent data-loss footgun.
+pattern = r'## Attendees[ \t]*\n(?:[ \t]*-[^\n]*\n|[ \t]*\n)*'
+new_content, n = re.subn(pattern, new_section, content, count=1)
+
+# Safety net: if the new body is shorter than the old one by more than the
+# length of the new attendees block, something went wrong — refuse to write.
+if n != 1 or len(new_content) + 512 < len(content):
+    sys.stderr.write(
+        "granola-ingest: attendees rewrite refused — would shrink body "
+        "({} -> {} bytes); leaving file untouched\n".format(len(content), len(new_content))
+    )
+    sys.exit(1)
 
 with open(output_file, 'w') as f:
     f.write(new_content)
 PYEOF
 
-    if [ -s "$tmp_out" ]; then
-        # Write updated content directly to the file (obsidian create won't overwrite)
-        cp "$tmp_out" "$full_path"
+    local py_status=$?
+    if [ $py_status -eq 0 ] && [ -s "$tmp_out" ]; then
+        # Atomic replace — minimises the window Obsidian's vault watcher can
+        # race with us and spawn a "<name> 1.md" conflict sibling.
+        mv "$tmp_out" "$full_path"
+    else
+        rm -f "$tmp_out"
     fi
-    rm -f "$tmp_in" "$tmp_out"
+    rm -f "$tmp_in"
 }
 
 # Read series_overrides from config.yaml as "title|meeting_name" pairs (one per line)
@@ -430,6 +483,16 @@ extract_body() {
         /^---$/ { count++; if (count == 2) { found=1; next } }
         found { print }
     '
+}
+
+# Pull the original speaker-labeled transcript from Granola's local cache.
+# Prints the markdown callout to stdout on success, or nothing if unavailable.
+# Never fails the caller — absence of a transcript is normal.
+fetch_original_transcript() {
+    local gid="$1"
+    [ -z "$gid" ] && return 0
+    [ -x "$TRANSCRIPT_HELPER" ] || return 0
+    "$TRANSCRIPT_HELPER" "$gid" --callout 2>/dev/null || true
 }
 
 # Generate the collision-avoided target filename in 04 Data/YYYY/MM/
@@ -547,11 +610,16 @@ for file in "${FILES[@]}"; do
     fi
 
     # --- Dedup: skip if vault already has this granola_id ---
+    # On skip, also delete the staging file. The Granola plugin re-syncs files
+    # the next time it polls (it doesn't know they're already ingested), so
+    # leaving them around accumulates staging bloat — caught up to 41 stale
+    # files in May. The vault note is the source of truth; staging is transient.
     if [ "$DRY_RUN" = false ]; then
         existing=$(find_by_granola_id "$granola_id")
         if [ -n "$existing" ]; then
             echo "  Skipped (already exists): $title [granola_id=$granola_id → $existing]"
             SKIPPED=$((SKIPPED + 1))
+            rm -f "$file" 2>/dev/null || true
             continue
         fi
     fi
@@ -627,6 +695,21 @@ for file in "${FILES[@]}"; do
 
     # --- Preserve body from staged note ---
     body=$(extract_body "$content")
+
+    # --- Append original transcript from local Granola cache if available ---
+    # The staged note typically contains only the AI summary (the plugin's full
+    # transcript option often isn't enabled). Pull the raw speaker-segmented
+    # transcript from Granola's Electron cache so it is preserved alongside the
+    # summary and can be mined later.
+    if ! echo "$body" | grep -qE '\[!note\]-?[[:space:]]+(Original[[:space:]]+)?Transcript'; then
+        transcript_callout=$(fetch_original_transcript "$granola_id")
+        if [ -n "$transcript_callout" ]; then
+            body="${body}
+
+${transcript_callout}
+"
+        fi
+    fi
 
     # --- Build full note content ---
     year="${date:0:4}"

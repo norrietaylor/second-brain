@@ -1,0 +1,113 @@
+#!/bin/bash
+# granola-transcript — extract the original transcript for a Granola meeting
+#
+# Usage:
+#   granola-transcript <granola_id>                  # markdown callout form
+#   granola-transcript <granola_id> --raw            # raw "[ME|THEM] text" lines
+#   granola-transcript <granola_id> --timestamps     # include per-segment timestamps
+#   granola-transcript --list                        # list all granola_ids present in cache
+#
+# Reads Granola's local Electron cache at
+#   ~/Library/Application Support/Granola/cache-v6.json
+# and emits the transcript for the requested meeting. The cache holds the raw
+# speaker-segmented transcript that the MCP API / staged markdown note do NOT
+# surface — `source: microphone` = me, `source: system` = them.
+#
+# Exit codes:
+#   0  success (transcript emitted, or none found but cache was readable)
+#   2  cache file missing or unreadable
+#   3  jq not installed
+#
+# Intended as a shared helper for granola-ingest and granola-initial-sync —
+# callers should treat empty stdout as "no transcript available" and continue.
+
+set -euo pipefail
+
+CACHE_FILE="${GRANOLA_CACHE_FILE:-$HOME/Library/Application Support/Granola/cache-v6.json}"
+
+die() {
+    echo "granola-transcript: $*" >&2
+    exit "${2:-1}"
+}
+
+command -v jq >/dev/null 2>&1 || die "jq is required" 3
+
+if [ ! -f "$CACHE_FILE" ]; then
+    die "cache file not found: $CACHE_FILE" 2
+fi
+
+MODE="callout"
+GRANOLA_ID=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --raw) MODE="raw"; shift ;;
+        --timestamps) MODE="timestamps"; shift ;;
+        --callout) MODE="callout"; shift ;;
+        --list) MODE="list"; shift ;;
+        -h|--help)
+            sed -n '2,21p' "$0"
+            exit 0 ;;
+        -*)
+            die "unknown flag: $1" ;;
+        *)
+            GRANOLA_ID="$1"; shift ;;
+    esac
+done
+
+if [ "$MODE" = "list" ]; then
+    # `// {}` keeps `keys[]` from erroring when transcripts is missing/null.
+    jq -r '(.cache.state.transcripts // {}) | keys[]' "$CACHE_FILE"
+    exit 0
+fi
+
+if [ -z "$GRANOLA_ID" ]; then
+    die "granola_id required (or --list / --help)"
+fi
+
+# Check presence — empty stdout + exit 0 if no transcript for this id
+HAS=$(jq -r --arg gid "$GRANOLA_ID" '.cache.state.transcripts[$gid] // empty | length // empty' "$CACHE_FILE")
+if [ -z "$HAS" ] || [ "$HAS" = "0" ]; then
+    exit 0
+fi
+
+case "$MODE" in
+    raw)
+        jq -r --arg gid "$GRANOLA_ID" '
+            .cache.state.transcripts[$gid]
+            | sort_by(.start_timestamp)
+            | .[]
+            | "[\(.source | if . == "microphone" then "ME" else "THEM" end)] \(.text)"
+        ' "$CACHE_FILE"
+        ;;
+    timestamps)
+        jq -r --arg gid "$GRANOLA_ID" '
+            .cache.state.transcripts[$gid]
+            | sort_by(.start_timestamp)
+            | .[]
+            | "[\(.start_timestamp)] [\(.source | if . == "microphone" then "ME" else "THEM" end)] \(.text)"
+        ' "$CACHE_FILE"
+        ;;
+    callout)
+        # Emit a collapsible callout that groups consecutive same-speaker turns.
+        # Each line is blockquote-prefixed so it stays inside the callout when
+        # appended to a meeting note.
+        jq -r --arg gid "$GRANOLA_ID" '
+            def speaker_label(s): if s == "microphone" then "**Me:**" else "**Them:**" end;
+            .cache.state.transcripts[$gid]
+            | sort_by(.start_timestamp)
+            | reduce .[] as $seg (
+                [];
+                if (length > 0) and (.[-1].source == $seg.source) then
+                    .[:-1] + [{source: $seg.source, text: (.[-1].text + " " + $seg.text)}]
+                else
+                    . + [{source: $seg.source, text: $seg.text}]
+                end
+            )
+            | "> [!note]- Original Transcript",
+              "> Extracted from Granola local cache.",
+              ">",
+              (.[] | "> " + speaker_label(.source) + " " + .text)
+        ' "$CACHE_FILE"
+        ;;
+esac

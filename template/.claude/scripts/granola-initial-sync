@@ -35,6 +35,14 @@ MCP_URL = "https://mcp.granola.ai/mcp"
 DEFAULT_DELAY = 3  # seconds between transcript API calls
 MAX_MEETINGS_PER_BATCH = 10
 
+# Granola's local Electron cache holds the raw speaker-segmented transcript
+# (`source: microphone` = me, `source: system` = them). Prefer it over the
+# MCP API since it's authoritative, latency-free, and immune to rate limits.
+CACHE_FILE = Path(os.environ.get(
+    "GRANOLA_CACHE_FILE",
+    Path.home() / "Library" / "Application Support" / "Granola" / "cache-v6.json"
+))
+
 # ---- Helpers ----------------------------------------------------------------
 
 def die(msg):
@@ -43,9 +51,18 @@ def die(msg):
 
 def read_plugin_tokens():
     """Read OAuth tokens from the Obsidian plugin's data.json."""
-    data_path = Path(VAULT) / ".obsidian" / "plugins" / "obsidian-granola-plugin" / "data.json"
-    if not data_path.exists():
-        die(f"Plugin data not found at {data_path}\nMake sure the Granola plugin is installed and authenticated.")
+    plugin_dir = Path(VAULT) / ".obsidian" / "plugins"
+    candidates = [
+        plugin_dir / "obsidian-granola-plugin" / "data.json",
+        plugin_dir / "granola-meetings-simple-sync" / "data.json",
+    ]
+    data_path = next((p for p in candidates if p.exists()), None)
+    if data_path is None:
+        die(
+            "Plugin data not found in any known location:\n  "
+            + "\n  ".join(str(p) for p in candidates)
+            + "\nMake sure the Granola plugin is installed and authenticated."
+        )
 
     with open(data_path) as f:
         data = json.load(f)
@@ -256,6 +273,51 @@ def parse_transcript(raw_text):
     formatted = re.sub(r'\b(Me|Them):', r'\n**\1:**', str(raw_text))
     return formatted.strip()
 
+
+_CACHE_TRANSCRIPTS = None
+
+def _load_cache_transcripts():
+    """Load Granola's local cache once per run. Returns dict[granola_id -> segments]."""
+    global _CACHE_TRANSCRIPTS
+    if _CACHE_TRANSCRIPTS is not None:
+        return _CACHE_TRANSCRIPTS
+    _CACHE_TRANSCRIPTS = {}
+    try:
+        with open(CACHE_FILE) as f:
+            data = json.load(f)
+        _CACHE_TRANSCRIPTS = data.get("cache", {}).get("state", {}).get("transcripts", {}) or {}
+    except (OSError, json.JSONDecodeError):
+        _CACHE_TRANSCRIPTS = {}
+    return _CACHE_TRANSCRIPTS
+
+
+def transcript_from_cache(granola_id):
+    """Return the speaker-labeled transcript (grouped by consecutive same-speaker
+    turns) for the given meeting id from Granola's local Electron cache, or ""
+    if not present."""
+    cache = _load_cache_transcripts()
+    segments = cache.get(granola_id)
+    if not segments:
+        return ""
+
+    ordered = sorted(segments, key=lambda s: s.get("start_timestamp", ""))
+
+    def label(source):
+        return "**Me:**" if source == "microphone" else "**Them:**"
+
+    grouped = []
+    for seg in ordered:
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        src = seg.get("source", "system")
+        if grouped and grouped[-1]["source"] == src:
+            grouped[-1]["text"] += " " + text
+        else:
+            grouped.append({"source": src, "text": text})
+
+    return "\n".join(f"{label(g['source'])} {g['text']}" for g in grouped)
+
 def parse_date(date_str):
     """Parse date string to YYYY-MM-DD format."""
     # Try common formats
@@ -420,33 +482,48 @@ def main():
         if i + MAX_MEETINGS_PER_BATCH < len(new_meetings):
             time.sleep(1)  # Brief pause between batches
 
-    # Step 3: Fetch transcripts (rate limited)
+    # Step 3: Fetch transcripts — prefer the local Granola Electron cache
+    # (speaker-segmented, no rate limits). Fall back to the MCP API only when
+    # the cache doesn't have the meeting.
     transcripts = {}
     if not args.no_transcripts:
-        print(f"\nFetching transcripts ({args.delay}s delay between calls)...")
-        for idx, m in enumerate(new_meetings):
+        cache_hits = 0
+        pending_ids = []
+        for m in new_meetings:
             mid = m["id"]
-            progress = f"[{idx + 1}/{len(new_meetings)}]"
-            print(f"  {progress} {m['title'][:60]}...", end="", flush=True)
-
-            result = mcp_call("get_meeting_transcript", {"meeting_id": mid}, access_token, request_id=idx + 200)
-            if result:
-                raw = extract_text(result)
-                transcripts[mid] = parse_transcript(raw)
-                print(" OK")
+            cache_text = transcript_from_cache(mid)
+            if cache_text:
+                transcripts[mid] = cache_text
+                cache_hits += 1
             else:
-                print(" RATE LIMITED - waiting 15s...")
-                time.sleep(15)
-                result = mcp_call("get_meeting_transcript", {"meeting_id": mid}, access_token, request_id=idx + 500)
+                pending_ids.append(m)
+        print(f"\nTranscripts from local cache: {cache_hits}/{len(new_meetings)}")
+
+        if pending_ids:
+            print(f"Fetching {len(pending_ids)} remaining via API ({args.delay}s delay between calls)...")
+            for idx, m in enumerate(pending_ids):
+                mid = m["id"]
+                progress = f"[{idx + 1}/{len(pending_ids)}]"
+                print(f"  {progress} {m['title'][:60]}...", end="", flush=True)
+
+                result = mcp_call("get_meeting_transcript", {"meeting_id": mid}, access_token, request_id=idx + 200)
                 if result:
                     raw = extract_text(result)
                     transcripts[mid] = parse_transcript(raw)
-                    print(f"  {progress} retry OK")
+                    print(" OK")
                 else:
-                    print(f"  {progress} SKIPPED (still rate limited)")
+                    print(" RATE LIMITED - waiting 15s...")
+                    time.sleep(15)
+                    result = mcp_call("get_meeting_transcript", {"meeting_id": mid}, access_token, request_id=idx + 500)
+                    if result:
+                        raw = extract_text(result)
+                        transcripts[mid] = parse_transcript(raw)
+                        print(f"  {progress} retry OK")
+                    else:
+                        print(f"  {progress} SKIPPED (still rate limited)")
 
-            if idx < len(new_meetings) - 1:
-                time.sleep(args.delay)
+                if idx < len(pending_ids) - 1:
+                    time.sleep(args.delay)
 
     # Step 4: Write files to staging folder
     print(f"\nWriting {len(new_meetings)} files to {staging_folder}/...")
