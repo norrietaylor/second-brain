@@ -134,6 +134,9 @@ copy_template_tree() {
   if ! echo "$integrations" | grep -q "Raindrop"; then
     excludes+=("*Raindrop*")
   fi
+  if ! echo "$integrations" | grep -q "Google Workspace"; then
+    excludes+=("*gemini-import*" "*gcal-agenda*" "*gmail-onmyplate*")
+  fi
 
   # Walk the template tree
   while IFS= read -r -d '' src; do

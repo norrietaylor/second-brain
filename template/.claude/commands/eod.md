@@ -52,6 +52,29 @@ Capture the script's output (number of meetings ingested) and store as `granola_
 
 If the staging folder is empty or doesn't exist, this is a no-op.
 
+### Step 0.8: Ingest Gemini Meetings
+
+Sweep Gmail for new Gemini-generated meeting-minutes emails and ingest their linked Google Docs as `type: meeting, source: gemini` notes.
+
+**Skip this step entirely** if the Google Workspace integration is not enabled (i.e. `google:` block is absent from `05 Meta/config.yaml`).
+
+1. Read `05 Meta/config.yaml` — pick up `google.gemini.sender_patterns`, `google.gemini.subject_patterns`, and `google.gemini.series_overrides`.
+2. Read the last-sweep timestamp from `05 Meta/logs/gemini-sweep.json` (format: `{"last_sweep": "YYYY-MM-DD"}`). If the file does not exist, default to 7 days ago.
+3. Build a Gmail search query using `google.gemini.sender_patterns` and `subject_patterns`, bounded by `after:<last_sweep>`:
+
+   ```
+   from:(meetings-noreply@google.com OR noreply@google.com) subject:("took notes" OR "Notes by Gemini") after:YYYY/MM/DD
+   ```
+
+4. Call `mcp__claude_ai_Gmail__search_threads` with the query. For each thread ID returned:
+   - Check whether an existing vault note already has `gemini_thread_id: <id>` OR references the same `gemini_doc_id`. If yes, skip.
+   - Otherwise, invoke the `/gemini-import` agent flow with the thread ID as input (delegating to `.claude/agents/gemini-import.md`). The agent resolves the doc link, fetches the doc, and files the note.
+5. Collect the count of successful ingests as `gemini_ingest_count` (also track `gemini_skip_count` for already-ingested threads).
+6. Update `05 Meta/logs/gemini-sweep.json` with the current date as `last_sweep` (overwrite).
+7. Newly-created `type: meeting` notes are picked up automatically by Step 3 (Meeting Summary Generation) and Step 5 (Daily Note enrichment), so no additional plumbing is needed here.
+
+If the Gmail MCP is not available or the search returns zero results, record `gemini_ingest_count = 0` and proceed — this is a no-op, not an error.
+
 ### Step 0: Gather All Data
 
 Run the vault scan script to gather everything needed in one pass:
@@ -332,6 +355,33 @@ Append `### Slack Activity` section with channel summaries and collapsible time 
 obsidian vault={{VAULT_NAME}} append path="DAILY_NOTE_PATH" content="..." silent
 ```
 
+### Step 5.7: Calendar Reconciliation (MCP-based, skip if not configured)
+
+**Skip this step entirely** if `05 Meta/config.yaml` has no `google:` block, OR if the morning snapshot `05 Meta/logs/calendar/YYYY-MM-DD.json` does not exist (i.e. `/today` did not run today). Graceful skip — no error.
+
+Reconcile what was on the calendar this morning against what the calendar looks like now, so canceled / moved / newly-created meetings are captured before the day closes.
+
+1. **Read the morning snapshot** — `05 Meta/logs/calendar/YYYY-MM-DD.json` written by `/today` Step 2.7 (`events[]` keyed by `id`).
+2. **Re-pull the live calendar** — via the Google Calendar MCP (`mcp__claude_ai_Google_Calendar__list_events`), scoped to today only, across `google.calendar.calendar_ids`. Apply the same gcal-agenda drop rules (declined, transparent holidays, solo focus blocks).
+3. **Diff by event `id`** (fall back to summary+start when an id is missing):
+   - **Canceled** — in snapshot, now absent from the live pull OR `status == "cancelled"` OR `self.responseStatus` flipped to `declined`.
+   - **Moved** — present in both, but `start` (or `end`) differs from the snapshot. Record old → new time.
+   - **Created** — in the live pull, absent from the snapshot (added after the morning briefing).
+   - **Unchanged** — present in both with the same time. Not reported.
+4. **Cross-check against captured meetings** — for each non-canceled event, note whether a `type: meeting` note now exists for it today (Granola/Gemini ingested earlier in this `/eod` run, or matched by fuzzy `meeting_name`). Flag held meetings with **no vault note** as "no notes captured" so the user can decide whether to write one.
+
+**Append a `### Calendar Reconciliation` section** to the daily note (omit any empty bucket; skip the whole section if all three buckets are empty AND every event has a note):
+
+```markdown
+### Calendar Reconciliation
+- ❌ Canceled: HH:MM Meeting title
+- ↪ Moved: Meeting title — HH:MM → HH:MM
+- ➕ Created: HH:MM Meeting title (N attendees)
+- ⚠️ Held, no notes captured: HH:MM Meeting title
+```
+
+Track `calendar_canceled_count`, `calendar_moved_count`, `calendar_created_count`, `calendar_uncaptured_count` for the Display Output. Surface canceled/moved items that map to existing tasks or follow-ups in the Day Summary **Tomorrow** bullets where a reschedule is implied.
+
 ### Step 6: Generate Weekly Digest (Sundays only)
 
 **Skip if `SCAN.date.is_sunday` is false.**
@@ -441,11 +491,14 @@ After all processing completes, display a brief summary to the terminal:
 - S meeting summaries generated
 - T tasks closed from daily note
 [+ G granola meetings ingested]
+[+ E gemini meetings ingested]
+[+ Calendar: X canceled, Y moved, Z created, W held without notes]
 [+ weekly digest generated]
 [+ monthly digest generated]
 [Type mismatches: name (current → suggested), ...]
 ```
 
 Omit the "T tasks closed from daily note" line if `task_done_count` is 0.
+Omit the Calendar line if Step 5.7 was skipped or all four counts are 0.
 
 If nothing was processed: "Nothing to process today."

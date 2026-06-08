@@ -108,6 +108,28 @@ setup_notion() {
   fi
 }
 
+setup_google() {
+  local vault_dir="$1"
+
+  log_step "Google Workspace integration setup"
+
+  log_info "Gmail, Calendar, and Gemini-notes ingestion use the Google Workspace MCPs"
+  log_info "already configured in Claude (no CLI needed). Calendar is read-only."
+  echo ""
+
+  local self_email
+  self_email=$(prompt_input "Your Google email" \
+    "Used to identify you on calendar invites and Gemini distribution mail" \
+    "${TPL_USER_EMAIL:-}")
+  export TPL_GOOGLE_SELF_EMAIL="$self_email"
+
+  if [[ -n "$self_email" ]]; then
+    log_success "Google self email: ${self_email}"
+  else
+    log_info "No email set — edit 05 Meta/config.yaml (google.self_email) later"
+  fi
+}
+
 setup_granola() {
   local vault_dir="$1"
   local user_name="$2"
@@ -213,6 +235,39 @@ EOF
       appended=true
     fi
 
+    if echo "$integrations" | grep -q "Google Workspace" && ! grep -q '^google:' "$config_file"; then
+      cat >> "$config_file" <<EOF
+
+google:
+  self_name: "${TPL_USER_NAME}"
+  self_email: "${TPL_GOOGLE_SELF_EMAIL:-${TPL_USER_EMAIL:-}}"
+  gmail:
+    denylist_labels:
+      - CATEGORY_PROMOTIONS
+      - CATEGORY_SOCIAL
+      - CATEGORY_UPDATES
+      - SPAM
+    vip_senders: []
+    lookback_days: 3
+    follow_up_wait_days: 3
+  calendar:
+    calendar_ids:
+      - "primary"
+    agenda_days_ahead: 2
+  gemini:
+    sender_patterns:
+      - "meetings-noreply@google.com"
+      - "noreply@google.com"
+      - "gemini-notes@google.com"
+    subject_patterns:
+      - "Notes:"
+      - "took notes"
+      - "Notes by Gemini"
+    series_overrides: {}
+EOF
+      appended=true
+    fi
+
     if [[ "$appended" == true ]]; then
       log_success "Appended new integration sections to config.yaml"
     else
@@ -270,6 +325,39 @@ notion:
   task_databases:${notion_dbs_yaml}
   mention_lookback_days: 7
   follow_up_wait_days: 3
+EOF
+  fi
+
+  # Google Workspace section
+  if echo "$integrations" | grep -q "Google Workspace"; then
+    cat >> "$config_file" <<EOF
+
+google:
+  self_name: "${TPL_USER_NAME}"
+  self_email: "${TPL_GOOGLE_SELF_EMAIL:-${TPL_USER_EMAIL:-}}"
+  gmail:
+    denylist_labels:
+      - CATEGORY_PROMOTIONS
+      - CATEGORY_SOCIAL
+      - CATEGORY_UPDATES
+      - SPAM
+    vip_senders: []
+    lookback_days: 3
+    follow_up_wait_days: 3
+  calendar:
+    calendar_ids:
+      - "primary"
+    agenda_days_ahead: 2
+  gemini:
+    sender_patterns:
+      - "meetings-noreply@google.com"
+      - "noreply@google.com"
+      - "gemini-notes@google.com"
+    subject_patterns:
+      - "Notes:"
+      - "took notes"
+      - "Notes by Gemini"
+    series_overrides: {}
 EOF
   fi
 
@@ -421,6 +509,10 @@ run_integration_setup() {
     setup_granola "$vault_dir" "$user_name"
   fi
 
+  if echo "$integrations" | grep -q "Google Workspace"; then
+    setup_google "$vault_dir"
+  fi
+
   # Generate config.yaml based on selections
   generate_config "$vault_dir" "$integrations"
 
@@ -454,6 +546,9 @@ run_new_integrations_setup() {
   fi
   if echo "$newly_added" | grep -q "Granola"; then
     setup_granola "$vault_dir" "$user_name"
+  fi
+  if echo "$newly_added" | grep -q "Google Workspace"; then
+    setup_google "$vault_dir"
   fi
   # Git last (it commits initial state when initializing a previously-non-git vault)
   if echo "$newly_added" | grep -q "Git-backed"; then

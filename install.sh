@@ -98,6 +98,7 @@ if [[ "$UPDATE_MODE" == true ]]; then
       "Notion task tracking" \
       "Granola meeting sync" \
       "Raindrop bookmarks (Make It Rain plugin)" \
+      "Google Workspace (Gmail/Calendar/Gemini)" \
       "Git-backed vault")
     integrations=$(echo "$integrations_raw" | tr '\n' ',' | sed 's/,$//')
   fi
@@ -112,6 +113,7 @@ if [[ "$UPDATE_MODE" == true ]]; then
     "Notion task tracking"
     "Granola meeting sync"
     "Raindrop bookmarks (Make It Rain plugin)"
+    "Google Workspace (Gmail/Calendar/Gemini)"
     "Git-backed vault"
   )
 
@@ -277,6 +279,7 @@ integrations_raw=$(prompt_multi_select \
   "Notion task tracking" \
   "Granola meeting sync" \
   "Raindrop bookmarks (Make It Rain plugin)" \
+  "Google Workspace (Gmail/Calendar/Gemini)" \
   "Git-backed vault")
 
 # Normalize to comma-separated

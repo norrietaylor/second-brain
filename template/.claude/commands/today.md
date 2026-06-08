@@ -203,6 +203,49 @@ Save the aggregated result as `NOTION_RESULT`:
 
 Rules: omit empty sub-sections. Overdue items first in "Assigned to me" (sorted by due date ascending). Items without a `vault_note` drop the trailing `· [[...]]`. Omit the `| Due …` part if no due date.
 
+### Step 2.7: Calendar Agenda + Meeting Prep (MCP-based, skip if not configured)
+
+**Skip this step entirely** if `05 Meta/config.yaml` has no `google:` block — the Google Workspace integration is off.
+
+Pull today's calendar via the **Google Calendar MCP** (read-only) and prepare per-meeting notes in the daily note. Follow `.claude/skills/gcal-agenda/SKILL.md` Steps 1–3 to gather, enrich, and cross-reference today's events. Scope to **today only** (`time_min` = today 00:00 local, `time_max` = today 23:59 local) regardless of `agenda_days_ahead`.
+
+For each kept event (apply the gcal-agenda drop rules: declined, transparent holidays, solo focus blocks), build a prep block. Pull context from the vault to make each block actionable:
+
+1. **Attendees** — resolve emails to `@person` wiki-links via `02 Areas/People.base` (`emails` frontmatter). Show named attendees, `+N` for the rest.
+2. **Prior meeting in series** — fuzzy-match the kebab-cased event title against `meeting_name` in `02 Areas/Meetings.base`; link the most recent instance as `[[YYYY.MM.DD-name|last time]]`.
+3. **Open follow-ups owed** — for each attendee with a person note, pull any `follow_ups` items and surface them as prep ("you owe @who: …").
+4. **Agenda / talking points** — scan the event `description` for an agenda or linked docs (Gemini notes, pre-read). Synthesize 2–3 suggested talking points from the prior-meeting action items + open follow-ups + event description.
+5. **Links** — Google Meet/Zoom URL and any linked Google Doc.
+
+**Do NOT create per-meeting note files** — that collides with Granola/Gemini post-hoc ingestion (dedup is by `granola_id`/`gemini_doc_id`, which a pre-created stub lacks). Prep lives in the daily note only.
+
+**Persist a calendar snapshot** for `/eod` reconciliation. Write the morning's event list to `05 Meta/logs/calendar/YYYY-MM-DD.json` (overwrite):
+
+```json
+{
+  "captured_at": "YYYY-MM-DD HH:mm",
+  "events": [
+    {"id": "<event_id>", "summary": "...", "start": "YYYY-MM-DDTHH:mm", "end": "YYYY-MM-DDTHH:mm", "attendee_count": N, "response_status": "accepted|needsAction|...", "meet": "<url or null>"}
+  ]
+}
+```
+
+Save the kept events as `CALENDAR_RESULT` for the briefing and the daily-note section.
+
+**Format the `## Meeting Prep` section** for the daily note (chronological):
+
+```markdown
+## Meeting Prep
+
+- **09:00–09:30 — Meeting title** (3 attendees: @alice, @bob, +1) · [Meet](URL)
+  - Last time: [[YYYY.MM.DD-name|meeting-name]] — <one-line recap of prior outcome/open item>
+  - You owe @alice: <follow-up item>
+  - Talking points: <point 1>; <point 2>
+  - ⟡ awaiting your RSVP   ← only if response_status == needsAction
+```
+
+Rules: omit the section entirely if no events today. Drop sub-bullets that have no content (no prior meeting → omit "Last time"; no follow-ups → omit "You owe"). Mark `needsAction` events with `⟡ awaiting your RSVP`. Display times in the calendar's local timezone.
+
 ### Step 3: Check for Recent Digests
 
 From the `bases.digests` data in the scan output, check:
@@ -251,6 +294,10 @@ Daily note: [[YYYY.MM.DD-daily-note]]
 
 **Upcoming (N this week):**
 - Mon DD: Task name — [[YYYY.MM.DD-task-name|task-name]]
+
+**Today's schedule (N meetings):**
+- HH:MM Meeting title (N attendees) — prep ready in `## Meeting Prep`
+- ⟡ HH:MM Meeting title — awaiting your RSVP
 
 **Active projects (N):**
 - Project Name → "next action text"
