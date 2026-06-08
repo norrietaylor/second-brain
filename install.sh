@@ -13,6 +13,7 @@ source "${INSTALLER_DIR}/lib/common.sh"
 source "${INSTALLER_DIR}/lib/prerequisites.sh"
 source "${INSTALLER_DIR}/lib/templating.sh"
 source "${INSTALLER_DIR}/lib/integrations.sh"
+source "${INSTALLER_DIR}/lib/scheduling.sh"
 
 # ── Argument parsing ─────────────────────────────────────────────────
 UPDATE_MODE=false
@@ -98,6 +99,7 @@ if [[ "$UPDATE_MODE" == true ]]; then
       "Notion task tracking" \
       "Granola meeting sync" \
       "Raindrop bookmarks (Make It Rain plugin)" \
+      "Scheduled daily runs (launchd, macOS)" \
       "Git-backed vault")
     integrations=$(echo "$integrations_raw" | tr '\n' ',' | sed 's/,$//')
   fi
@@ -112,6 +114,7 @@ if [[ "$UPDATE_MODE" == true ]]; then
     "Notion task tracking"
     "Granola meeting sync"
     "Raindrop bookmarks (Make It Rain plugin)"
+    "Scheduled daily runs (launchd, macOS)"
     "Git-backed vault"
   )
 
@@ -277,6 +280,7 @@ integrations_raw=$(prompt_multi_select \
   "Notion task tracking" \
   "Granola meeting sync" \
   "Raindrop bookmarks (Make It Rain plugin)" \
+  "Scheduled daily runs (launchd, macOS)" \
   "Git-backed vault")
 
 # Normalize to comma-separated

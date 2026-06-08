@@ -151,6 +151,14 @@ check_all_prerequisites() {
     check_git || ((failures++))
   fi
 
+  if echo "$integrations" | grep -q "Scheduled daily"; then
+    if [[ "$(uname)" != "Darwin" ]]; then
+      log_warn "Scheduled daily runs require macOS (launchd) — not available on $(uname)"
+      ((failures++))
+    fi
+    check_claude_code || ((failures++))  # the headless runs invoke `claude -p`
+  fi
+
   return $failures
 }
 
