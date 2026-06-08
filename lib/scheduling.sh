@@ -23,6 +23,20 @@ _sched_safe_name() {
   echo "$1" | tr ' ' '-' | tr -cd '[:alnum:]._-'
 }
 
+# Prompt for a 24h hour, re-prompting until it is an integer in 0-23.
+# Prompts go to stderr so the captured stdout is just the value.
+_sched_prompt_hour() {
+  local header="$1" prompt="$2" default="$3" value
+  while true; do
+    value=$(prompt_input "$header" "$prompt" "$default")
+    if [[ "$value" =~ ^([0-9]|1[0-9]|2[0-3])$ ]]; then
+      echo "$value"
+      return 0
+    fi
+    log_warn "Enter an hour from 0 to 23." >&2
+  done
+}
+
 # Write one runner wrapper. Args: dest_file vault_dir log_file name cmd
 _sched_write_runner() {
   local dest_file="$1" vault_dir="$2" log_file="$3" name="$4" cmd="$5"
@@ -103,9 +117,10 @@ setup_scheduling() {
 
   local safe_name today_hour eod_hour
   safe_name="$(_sched_safe_name "$vault_name")"
+  [[ -z "$safe_name" ]] && safe_name="second-brain"  # names that strip to nothing
 
-  today_hour=$(prompt_input "Morning /today hour" "24h local hour to run /today (0-23)" "6")
-  eod_hour=$(prompt_input "Evening /eod hour" "24h local hour to run /eod + /learned (0-23)" "19")
+  today_hour=$(_sched_prompt_hour "Morning /today hour" "24h local hour to run /today (0-23)" "6")
+  eod_hour=$(_sched_prompt_hour "Evening /eod hour" "24h local hour to run /eod + /learned (0-23)" "19")
 
   local runner_dir log_dir agents_dir
   runner_dir="${HOME}/Library/Application Support/${safe_name}-scheduled"

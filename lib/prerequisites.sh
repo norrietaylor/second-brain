@@ -152,11 +152,12 @@ check_all_prerequisites() {
   fi
 
   if echo "$integrations" | grep -q "Scheduled daily"; then
+    # claude is already checked in the always-required block above; the headless
+    # runs invoke `claude -p`. Only the platform constraint is scheduled-specific.
     if [[ "$(uname)" != "Darwin" ]]; then
       log_warn "Scheduled daily runs require macOS (launchd) — not available on $(uname)"
       ((failures++))
     fi
-    check_claude_code || ((failures++))  # the headless runs invoke `claude -p`
   fi
 
   return $failures
