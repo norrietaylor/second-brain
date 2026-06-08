@@ -27,7 +27,7 @@ Read this file first. If `calendar.calendar_ids` is empty, default to `[primary]
 
 For each `calendar_id` in `google.calendar.calendar_ids`:
 
-```
+```text
 mcp__claude_ai_Google_Calendar__list_events with
   calendar_id=<id>
   time_min=<today 00:00 local>

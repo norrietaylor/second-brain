@@ -38,7 +38,7 @@ Read this file first. If `google.self_email` is empty, tell the user to fill it 
 
 Build a Gmail search query:
 
-```
+```text
 in:inbox is:unread -category:promotions -category:social -category:updates newer_than:3d
 ```
 

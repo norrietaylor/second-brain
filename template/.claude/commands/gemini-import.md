@@ -37,7 +37,7 @@ Extract one of:
 
 If a Gmail reference was given, resolve to a `DOC_ID` by fetching the thread:
 
-```
+```text
 mcp__claude_ai_Gmail__get_thread with thread_id=<THREAD_ID>
 ```
 
